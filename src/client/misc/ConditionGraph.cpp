@@ -170,7 +170,7 @@ float ConditionRuntime::riseDistance() const {
 
 void CondEvalContext::reset(SDK::Player* lp) {
     player = lp;
-    dHealth = dMaxHealth = dHunger = dFall = dMove = dGround = dHeld = dEnemies = false;
+    dHealth = dMaxHealth = dHunger = dMove = dGround = dFall = dHeld = dEnemies = false;
     dMoveInput = false;
     moveInput = nullptr;
     enemyDistSq.clear();
@@ -198,19 +198,6 @@ std::optional<float> CondEvalContext::hunger() {
         vHunger = player ? player->getHunger() : std::nullopt;
     }
     return vHunger;
-}
-
-std::optional<float> CondEvalContext::fallDistance() {
-    if (!dFall) {
-        dFall = true;
-        vFall = std::nullopt;
-        if (player) {
-            if (auto* comp = player->tryGetComponent<SDK::FallDistanceComponent>()) {
-                vFall = comp->fallDistance;
-            }
-        }
-    }
-    return vFall;
 }
 
 SDK::MoveInputComponent* CondEvalContext::moveInputComponent() {
@@ -254,6 +241,19 @@ bool CondEvalContext::onGround() {
         vGround = player ? player->isOnGround() : false;
     }
     return vGround;
+}
+
+float CondEvalContext::fallDistance() {
+    if (!dFall) {
+        dFall = true;
+        vFall = 0.f;
+        if (player) {
+            if (auto* comp = player->tryGetComponent<SDK::FallDistanceComponent>()) {
+                vFall = comp->fallDistance;
+            }
+        }
+    }
+    return vFall;
 }
 
 std::string const& CondEvalContext::heldItemId() {
@@ -778,11 +778,9 @@ bool ConditionGraph::evaluate(CondEvalContext& ctx, ConditionRuntime& rt) {
             if (value) result = compareValue(node.compare, *value, node.threshold);
             break;
         }
-        case CondKind::FallDistance: {
-            auto value = ctx.fallDistance();
-            if (value) result = compareValue(node.compare, *value, node.threshold);
+        case CondKind::FallDistance:
+            result = compareValue(node.compare, ctx.fallDistance(), node.threshold);
             break;
-        }
         case CondKind::RiseDistance: {
             result = compareValue(node.compare, rt.riseDistance(), node.threshold);
             break;

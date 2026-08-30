@@ -13,9 +13,9 @@
 #include "client/feature/module/modules/visual/AntiObs.h"
 #include "client/Necromancer.h"
 #include "client/input/Keyboard.h"
-#include "client/misc/ClientMessageQueue.h"
 #include "client/misc/EntityCache.h"
 #include "client/misc/LatencySpoof.h"
+#include "client/misc/WallCheck.h"
 #include "client/screen/ScreenManager.h"
 #include "mc/Addresses.h"
 #include "mc/common/client/game/ClientInstance.h"
@@ -36,11 +36,9 @@
 #include "mc/common/network/MinecraftPackets.h"
 #include "mc/common/network/PacketSender.h"
 #include <util/DrawUtil3D.h>
-#include <util/Logger.h>
+#include <util/Util.h>
 #include <cstring>
 #include <unordered_set>
-
-#define BT_LOG(...) do { } while (0)
 
 namespace {
     // A ray/box intersection returns a point exactly ON the box surface, and the
@@ -66,6 +64,27 @@ namespace {
         p.y = squeeze(p.y, box.lower.y, box.higher.y, clickInsetBottom, clickInsetTop);
         p.z = squeeze(p.z, box.lower.z, box.higher.z, clickInsetXZ, clickInsetXZ);
         return p;
+    }
+
+    Vec2 dirToRot(Vec3 const& from, Vec3 const& to) {
+        Vec3 d = to - from;
+        float len = d.magnitude();
+        if (len < 0.0001f) return { 0.f, 0.f };
+        d = d * (1.f / len);
+        float pitch = std::clamp(-std::asin(std::clamp(d.y, -1.f, 1.f)) * (180.f / pi_f), -89.9f, 89.9f);
+        float yaw = std::atan2(d.z, d.x) * (180.f / pi_f) - 90.f;
+        while (yaw > 180.f) yaw -= 360.f;
+        while (yaw < -180.f) yaw += 360.f;
+        return { pitch, yaw };
+    }
+
+    Vec3 standingEye(SDK::LocalPlayer* lp) {
+        Vec3 eye = lp->getPos();
+        if (lp->aabbShape) {
+            AABB& b = lp->aabbShape->boundingBox;
+            eye.y = b.lower.y + (b.higher.y - b.lower.y) * 0.85f;
+        }
+        return eye;
     }
 
     // Blocks a player cannot stand on. Everything absent from this list counts as
@@ -167,6 +186,14 @@ Backtrack::Backtrack()
     fakeLatSet->floatEditMax = static_cast<float>(maxLatencyMs);
     stackSet->floatEditMax = static_cast<float>(maxLatencyMs);
 
+    addSetting("freezeIncoming", LocalizeString::get("client.module.backtrack.freezeIncoming.name"),
+               LocalizeString::get("client.module.backtrack.freezeIncoming.desc"), freezeIncoming);
+    auto delayInSet = addSliderSetting("delayIncoming",
+                     LocalizeString::get("client.module.backtrack.delayIncoming.name"),
+                     LocalizeString::get("client.module.backtrack.delayIncoming.desc"), delayIncomingMs, FloatValue(0.f),
+                     FloatValue(2000.f), FloatValue(recordStepMs));
+    delayInSet->floatEditMax = static_cast<float>(maxLatencyMs);
+
     addSetting("stopFakeLatencyWhenLooting",
                LocalizeString::get("client.module.backtrack.stopFakeLatencyWhenLooting.name"),
                LocalizeString::get("client.module.backtrack.stopFakeLatencyWhenLooting.desc"),
@@ -211,6 +238,27 @@ Backtrack::Backtrack()
                      FloatValue(0.1f), FloatValue(1.f), FloatValue(0.1f), outlineCondition);
     addSetting("throughWalls", LocalizeString::get("client.module.backtrack.throughWalls.name"),
                LocalizeString::get("client.module.backtrack.throughWalls.desc"), throughWalls, "hitbox"_istrue);
+    Setting::Condition fillCondition(std::vector<Setting::SingleCond> {
+        { "hitbox", { 1 }, false },
+        { "hitboxStyle", { style_filled, style_both }, false },
+    });
+    addSliderSetting("fillOpacity", LocalizeString::get("client.module.backtrack.fillOpacity.name"),
+                     LocalizeString::get("client.module.backtrack.fillOpacity.desc"), fillOpacity, FloatValue(0.f),
+                     FloatValue(1.f), FloatValue(0.05f), fillCondition);
+    Setting::Condition decayCondition(std::vector<Setting::SingleCond> {
+        { "hitbox", { 1 }, false },
+        { "onlyLastRecord", { 0 }, false },
+    });
+    addSetting("decayRecords", LocalizeString::get("client.module.backtrack.decayRecords.name"),
+               LocalizeString::get("client.module.backtrack.decayRecords.desc"), decayRecords, decayCondition);
+    Setting::Condition decayAmountCondition(std::vector<Setting::SingleCond> {
+        { "hitbox", { 1 }, false },
+        { "onlyLastRecord", { 0 }, false },
+        { "decayRecords", { 1 }, false },
+    });
+    addSliderSetting("decayMinAlpha", LocalizeString::get("client.module.backtrack.decayMinAlpha.name"),
+                     LocalizeString::get("client.module.backtrack.decayMinAlpha.desc"), decayMinAlpha, FloatValue(0.f),
+                     FloatValue(1.f), FloatValue(0.05f), decayAmountCondition);
 
     this->listen<UpdateEvent>(&Backtrack::onUpdate);
     this->listen<AfterMoveEvent>(&Backtrack::onAfterMove);
@@ -230,6 +278,10 @@ void Backtrack::clearState() {
     appliedLatencyMs = 0;
     fakeLatencyPaused = false;
     LatencySpoof::setLatency(0);
+    LatencySpoof::setInboundFrozen(false);
+    LatencySpoof::setInboundDelay(0);
+    appliedInboundFrozen = false;
+    appliedInboundDelayMs = 0;
     inventoryAttemptUntil = {};
     lootAttemptUntil = {};
     inventoryScreenSeenAt = {};
@@ -237,6 +289,8 @@ void Backtrack::clearState() {
     pendingRID = 0;
     swallowRID = 0;
     reissueRID = 0;
+    ghostFireDirArmed = false;
+    lastQueueAt.clear();
     directAttackRID = 0;
     directAttackUntil = {};
     preparedGhostAttack = {};
@@ -245,17 +299,10 @@ void Backtrack::clearState() {
     freezeActive = false;
     aimedGhostAge = -1.f;
     pendingReportedOffset = -1.f;
-    confirmQueue.clear();
 }
 
 void Backtrack::onEnable() {
     clearState();
-    BT_LOG("[BT] ==== enabled: time={:.0f} fakeLat={:.0f} stackOff={:.0f} ghosts={:.0f} onlyLast={} freeze={} "
-           "attackSig=0x{:X} ====",
-           std::get<FloatValue>(timeMs).value, std::get<FloatValue>(fakeLatencyMs).value,
-           std::get<FloatValue>(stackLatencyDelayMs).value, std::get<FloatValue>(ghostCount).value,
-           std::get<BoolValue>(onlyLastRecord) ? 1 : 0, std::get<BoolValue>(freezeBacktrack) ? 1 : 0,
-           Signatures::GameMode_attack.result);
 }
 
 void Backtrack::onDisable() {
@@ -285,8 +332,8 @@ void Backtrack::onUpdate(Event&) {
 
     samplePositions();
     applyFakeLatency();
+    applyInboundControl();
     processAirClick();
-    processConfirmations();
 }
 
 void Backtrack::onAfterMove(Event&) {
@@ -357,7 +404,6 @@ void Backtrack::processAirClick() {
         // redirect using the record resolved at click time. Leave preparedGhostAttack
         // alone -- clearing it here would throw away the very thing that makes a manual
         // click land on the record the user aimed at. It expires on its own.
-        BT_LOG("[BT] airclick SKIP: vanilla AttackEvent already fired for this click");
         return;
     }
 
@@ -373,22 +419,12 @@ void Backtrack::processAirClick() {
     AABB aimedBox {};
     Vec3 aimedHit {};
     auto* target = pickStaleTarget(legitReach, &aimedGhost, &aimedBox, &aimedHit);
-    if (!target) {
-        BT_LOG("[BT] airclick MISS: no ghost under crosshair (ages={} onlyLast={})", ghostAgeScratch.size(),
-               std::get<BoolValue>(onlyLastRecord) ? 1 : 0);
-        return;
-    }
+    if (!target) return;
 
     // pickStaleTarget just recorded which ghost the ray hit; report a timestamp that
     // matches its age so the server rewinds to that ghost and not the slider's.
     pendingReportedOffset = adjustedOffsetFor(aimedGhostAge);
     reportedOffsetUntil = now + std::chrono::milliseconds(reportedOffsetHoldMs);
-
-    BT_LOG("[BT] airclick HIT rid={} ghostAge={:.0f}ms offset={:.0f} hit=({:.2f},{:.2f},{:.2f}) "
-           "boxY=[{:.2f}..{:.2f}] half={}",
-           target->getRuntimeID(), aimedGhostAge, pendingReportedOffset, aimedHit.x, aimedHit.y, aimedHit.z,
-           aimedBox.lower.y, aimedBox.higher.y,
-           aimedHit.y > (aimedBox.lower.y + aimedBox.higher.y) * 0.5f ? "UPPER" : "LOWER");
 
     attackQueue.push_back({ target->getRuntimeID(), clickPendingAt, aimedGhost, aimedBox, aimedHit,
                             pendingReportedOffset });
@@ -412,10 +448,7 @@ void Backtrack::processAttackQueue() {
         attackQueue.pop_front();
 
         auto* target = resolveActor(rid);
-        if (!target) {
-            BT_LOG("[BT] fire SKIP rid={}: target no longer resolvable", rid);
-            continue;
-        }
+        if (!target) continue;
 
         // Use the ghost position captured when you actually aimed, not a fresh
         // lookup. By the time the delay elapses the buffer has rolled forward, so
@@ -427,14 +460,19 @@ void Backtrack::processAttackQueue() {
         reissueUntil = now + std::chrono::milliseconds(250);
         swallowRID = 0;
 
-        if (!Signatures::GameMode_attack.result) {
-            BT_LOG("[BT] fire ABORT: GameMode_attack signature unresolved");
-            continue;
-        }
+        // The freeze client's genuine hits work because EVERYTHING points at the
+        // frozen model: the click position AND the attack direction the server
+        // reads from the auth packet. Our re-issued attack fixes the click
+        // position but the direction still points wherever the last real input
+        // left it -- usually the live model, sometimes nowhere when the crosshair
+        // ray missed it. On strict servers that inconsistency is exactly the
+        // "sometimes lands, sometimes not". Write the ghost direction into the
+        // input component so the packet builder serializes it, same as PSilent.
+        ghostFireDir = dirToRot(standingEye(lp), clickPos);
+        ghostFireDirArmed = true;
+        if (auto* input = lp->getMoveInputComponent()) input->interactDir = ghostFireDir;
 
-        Vec3 livePos = target->getPos();
-        auto hpBefore = target->getHealth();
-        float hpBeforeVal = hpBefore ? *hpBefore : -1.f;
+        if (!Signatures::GameMode_attack.result) continue;
 
         // Announce the latency this ghost implies immediately before the attack, so the
         // server's rewind window is set to that instant when it validates the hit.
@@ -444,72 +482,7 @@ void Backtrack::processAttackQueue() {
 
         using GameModeAttackFn = __int64 (*)(void*, SDK::Actor*, char, Vec3*);
         reinterpret_cast<GameModeAttackFn>(Signatures::GameMode_attack.result)(lp->gameMode, target, 0, &clickPos);
-
-        // Distance between where we claim to hit and where the enemy actually is now.
-        // A large value is expected (that is the whole point) but it is the number the
-        // server's reach check sees, so it is worth having in the log.
-        float sep = clickPos.distance(livePos);
-        bool upper = clickPos.y > (attackFront.ghostBox.lower.y + attackFront.ghostBox.higher.y) * 0.5f;
-        float belowTop = attackFront.ghostBox.higher.y - clickPos.y;
-
-        // The game derives its attack direction from |clickPos - playerPos| (see the
-        // lambda at 0x142680360), so that distance -- not the staleness one -- is what
-        // a reach check would read. Logging both, plus the vertical delta, because that
-        // is the only thing that changes between an upper and a lower aim.
-        Vec3 selfPos = lp->getPos();
-        float reachDist = clickPos.distance(selfPos);
-        float dy = clickPos.y - selfPos.y;
-
-        BT_LOG("[BT] fire rid={} half={} click=({:.2f},{:.2f},{:.2f}) live=({:.2f},{:.2f},{:.2f}) "
-               "self=({:.2f},{:.2f},{:.2f}) reach={:.2f} dy={:+.2f} sep={:.2f} hpBefore={:.1f} offset={:.0f}",
-               rid, upper ? "UPPER" : "LOWER", clickPos.x, clickPos.y, clickPos.z, livePos.x, livePos.y, livePos.z,
-               selfPos.x, selfPos.y, selfPos.z, reachDist, dy, sep, hpBeforeVal, pendingReportedOffset);
-        (void)reachDist;
-        (void)dy;
-        (void)sep;
-        (void)upper;
-
-        confirmQueue.push_back({ rid, hpBeforeVal, aimedGhostAge, pendingReportedOffset, belowTop, now, false });
-        // One outstanding confirm per target. Several in flight all matched the same
-        // health drop, so a single landed hit reported as three or four -- which made
-        // the hit rate look far better than it was.
-        for (auto& c : confirmQueue) {
-            if (c.runtimeID == rid && !c.done && &c != &confirmQueue.back()) c.done = true;
-        }
-        while (confirmQueue.size() > 16) confirmQueue.pop_front();
     }
-}
-
-void Backtrack::processConfirmations() {
-    if (confirmQueue.empty()) return;
-    auto now = std::chrono::steady_clock::now();
-
-    for (auto& c : confirmQueue) {
-        if (c.done) continue;
-        auto* actor = resolveActor(c.runtimeID);
-        if (actor) {
-            auto hp = actor->getHealth();
-            if (hp && c.hpAtFire >= 0.f && *hp < c.hpAtFire) {
-                BT_LOG("[BT] CONFIRM rid={} belowTop={:.2f} ghostAge={:.0f} DAMAGE {:.1f}->{:.1f} after {}ms",
-                       c.runtimeID, c.belowTop, c.ghostAge, c.hpAtFire, *hp,
-                       std::chrono::duration_cast<std::chrono::milliseconds>(now - c.firedAt).count());
-                float landed = *hp;
-                for (auto& other : confirmQueue) {
-                    if (!other.done && other.runtimeID == c.runtimeID && other.hpAtFire >= landed) other.done = true;
-                }
-                continue;
-            }
-        }
-        if (now - c.firedAt >= std::chrono::milliseconds(confirmWindowMs)) {
-            BT_LOG("[BT] NODAMAGE rid={} belowTop={:.2f} ghostAge={:.0f} hp stayed {:.1f} after {}ms", c.runtimeID,
-                   c.belowTop, c.ghostAge, c.hpAtFire, confirmWindowMs);
-            c.done = true;
-        }
-    }
-
-    // Compact from anywhere, not just the front: a single stuck entry at the head would
-    // otherwise pin everything behind it and keep it all in the per-tick scan.
-    std::erase_if(confirmQueue, [](PendingConfirm const& c) { return c.done; });
 }
 
 void Backtrack::allowDirectAttack(uint64_t runtimeID) {
@@ -528,11 +501,7 @@ void Backtrack::onAttack(Event& evG) {
         directAttackRID = 0;
         return;
     }
-    if (rid == reissueRID && now < reissueUntil) {
-        BT_LOG("[BT] attackEvent rid={} IGNORED (our own re-issue)", rid);
-        return;
-    }
-    BT_LOG("[BT] attackEvent rid={} accepted -> pending", rid);
+    if (rid == reissueRID && now < reissueUntil) return;
     lastAttackEventAt = now;
     pendingRID = rid;
     pendingAt = now;
@@ -808,6 +777,20 @@ void Backtrack::applyFakeLatency() {
     LatencySpoof::setLatency(want);
 }
 
+void Backtrack::applyInboundControl() {
+    bool wantFreeze = isEnabled() && std::get<BoolValue>(freezeIncoming).value;
+    uint32_t wantDelay = 0;
+    if (isEnabled()) {
+        wantDelay = static_cast<uint32_t>(
+            std::clamp(std::get<FloatValue>(delayIncomingMs).value, 0.f, static_cast<float>(maxLatencyMs)));
+    }
+    if (wantFreeze == appliedInboundFrozen && wantDelay == appliedInboundDelayMs) return;
+    appliedInboundFrozen = wantFreeze;
+    appliedInboundDelayMs = wantDelay;
+    LatencySpoof::setInboundFrozen(wantFreeze);
+    LatencySpoof::setInboundDelay(wantDelay);
+}
+
 void Backtrack::onSendPacket(Event& evG) {
     auto& ev = reinterpret_cast<SendPacketEvent&>(evG);
     auto* packet = ev.getPacket();
@@ -824,10 +807,8 @@ void Backtrack::onSendPacket(Event& evG) {
         // attack queue drained meant most hits never got their timestamp out at all.
         float offset = std::clamp(std::get<FloatValue>(stackLatencyDelayMs).value, 0.f,
                                   static_cast<float>(maxLatencyMs));
-        bool usedOverride = false;
         if (pendingReportedOffset >= 0.f) {
             offset = pendingReportedOffset;
-            usedOverride = true;
             // Consume it immediately. CubeCraft sends these ~60x/second, so a
             // time-windowed override got stamped onto dozens of consecutive echoes and
             // pinned the server's ping estimate at one ghost's age -- every later hit
@@ -836,33 +817,35 @@ void Backtrack::onSendPacket(Event& evG) {
         }
         if (offset > 0.f) {
             auto base = reinterpret_cast<uintptr_t>(packet);
-            auto* timestamp = reinterpret_cast<uint64_t*>(base + 0x30);
+            auto* timestamp =
+                reinterpret_cast<uint64_t*>(base + Signatures::FieldOffset::NetworkStackLatencyPacket::timestamp);
             uint64_t offsetUs = static_cast<uint64_t>(offset * 1000.0f);
-            bool applied = *timestamp > offsetUs;
-            if (applied) *timestamp -= offsetUs;
-            // Only log overrides. The slider path fires ~60x/second on CubeCraft and
-            // would bury everything else in the trace.
-            if (usedOverride) {
-                BT_LOG("[BT] nsl echo OVERRIDE offset={:.0f} raw={} applied={}", offset, *timestamp,
-                       applied ? 1 : 0);
-            }
+            if (*timestamp > offsetUs) *timestamp -= offsetUs;
         }
+    }
+
+    auto now = std::chrono::steady_clock::now();
+
+    if (packet->getID() == SDK::PacketID::PLAYER_AUTH_INPUT && ghostFireDirArmed && reissueRID != 0 &&
+        now < reissueUntil) {
+        auto base = reinterpret_cast<uintptr_t>(packet);
+        auto* interact = reinterpret_cast<float*>(
+            base + Signatures::FieldOffset::PlayerAuthInputPacket::interactRotation);
+        interact[0] = ghostFireDir.x;
+        interact[1] = ghostFireDir.y;
+        ghostFireDirArmed = false;
     }
 
     uint64_t target = 0;
     if (!isAttackPacket(packet, target)) return;
 
-    auto now = std::chrono::steady_clock::now();
-
     if (swallowRID != 0 && target == swallowRID && now < swallowUntil) {
-        BT_LOG("[BT] send SWALLOW rid={} (already queued, cancelling duplicate)", target);
         ev.setCancelled(true);
         return;
     }
 
     if (pendingRID == 0 || target != pendingRID) return;
     if (now - pendingAt > std::chrono::milliseconds(150)) {
-        BT_LOG("[BT] send STALE rid={}: pending older than 150ms, letting through", target);
         pendingRID = 0;
         return;
     }
@@ -906,14 +889,12 @@ void Backtrack::onSendPacket(Event& evG) {
         ghostSample = findSample(pendingRID, useAge, ghostFresh);
     }
     if (!ghostSample) {
-        BT_LOG("[BT] send NOGHOST rid={} age={:.0f}ms: no record, letting attack through", target, useAge);
         pendingRID = 0;
         return;
     }
     // Airborne records are drawn but not attackable, so let the vanilla attack through
     // untouched rather than redirecting it at a record we consider invalid.
     if (std::get<BoolValue>(invalidateAirborne) && ghostSample->airborne) {
-        BT_LOG("[BT] send AIRBORNE rid={} age={:.0f}ms: record invalidated, letting attack through", target, useAge);
         pendingRID = 0;
         return;
     }
@@ -965,22 +946,21 @@ void Backtrack::sendLatencyProbe(float offsetMs) {
     if (!pkt) return;
 
     auto base = reinterpret_cast<uintptr_t>(pkt.get());
-    // +0x30 is "Creation Time" in microseconds (confirmed: the serializer at
+    using Nsl = Signatures::FieldOffset::NetworkStackLatencyPacket;
+    // Nsl::timestamp is "Creation Time" in microseconds (confirmed: the serializer at
     // 0x14288B970 labels a1+6 with that string). Backdating it by the offset makes the
     // server measure a correspondingly larger round trip.
     uint64_t nowUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
     uint64_t offsetUs = static_cast<uint64_t>(offsetMs * 1000.f);
-    *reinterpret_cast<uint64_t*>(base + 0x30) = (nowUs > offsetUs) ? (nowUs - offsetUs) : 0;
-    // +0x38 asks the peer to send it back. Without it this is a one-way report.
-    *reinterpret_cast<uint8_t*>(base + 0x38) = 1;
+    *reinterpret_cast<uint64_t*>(base + Nsl::timestamp) = (nowUs > offsetUs) ? (nowUs - offsetUs) : 0;
+    // Nsl::needsResponse asks the peer to send it back. Without it this is a one-way report.
+    *reinterpret_cast<uint8_t*>(base + Nsl::needsResponse) = 1;
 
     probeInFlight = true;  // let our own send hook pass this through untouched
     lp->packetSender->sendToServer(pkt.get());
     probeInFlight = false;
-
-    BT_LOG("[BT] probe SENT offset={:.0f} ts={}", offsetMs, *reinterpret_cast<uint64_t*>(base + 0x30));
 }
 
 bool Backtrack::prepareGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec3 const& hitPoint, float ageMs) {
@@ -999,17 +979,32 @@ bool Backtrack::prepareGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec
     return true;
 }
 
-bool Backtrack::queueGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec3 const& hitPoint, float ageMs) {
+bool Backtrack::queueGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec3 const& hitPoint, float ageMs,
+                                 bool multiPart) {
     if (!isEnabled()) return false;
     auto* target = resolveActor(runtimeID);
     if (!target) return false;
 
-    float age = std::clamp(ageMs, 0.f, static_cast<float>(maxRecordMs));
-    float reportedOffset = adjustedOffsetFor(age);
     auto now = std::chrono::steady_clock::now();
-    pendingReportedOffset = reportedOffset;
-    reportedOffsetUntil = now + std::chrono::milliseconds(reportedOffsetHoldMs);
-    aimedGhostAge = age;
+
+    if (!multiPart) {
+        auto lastIt = lastQueueAt.find(runtimeID);
+        if (lastIt != lastQueueAt.end() && now - lastIt->second < std::chrono::milliseconds(60)) return true;
+    }
+    lastQueueAt[runtimeID] = now;
+
+    auto ci = SDK::ClientInstance::get();
+    auto* lp = ci ? ci->getLocalPlayer() : nullptr;
+    if (lp && standingEye(lp).distance(hitPoint) < 0.5f) return false;
+
+    float age = std::clamp(ageMs, 0.f, static_cast<float>(maxRecordMs));
+    float reportedOffset = 0.f;
+    if (!multiPart) {
+        reportedOffset = adjustedOffsetFor(age);
+        pendingReportedOffset = reportedOffset;
+        reportedOffsetUntil = now + std::chrono::milliseconds(reportedOffsetHoldMs);
+        aimedGhostAge = age;
+    }
 
     attackQueue.push_back({ runtimeID, now, ghostBox.getCenter(), ghostBox, pushInsideBox(hitPoint, ghostBox),
                             reportedOffset });
@@ -1069,17 +1064,21 @@ bool Backtrack::isAttackPacket(SDK::Packet* packet, uint64_t& outTarget) {
     auto id = packet->getID();
     auto base = reinterpret_cast<uintptr_t>(packet);
 
+    using Interact = Signatures::FieldOffset::InteractPacket;
+    using AuthInput = Signatures::FieldOffset::PlayerAuthInputPacket;
+    using Txn = Signatures::FieldOffset::ItemUseTransaction;
+
     if (id == SDK::PacketID::INTERACT) {
-        if (*reinterpret_cast<uint8_t*>(base + 0x30) != 2) return false;
-        outTarget = *reinterpret_cast<uint64_t*>(base + 0x38);
+        if (*reinterpret_cast<uint8_t*>(base + Interact::action) != Interact::actionAttack) return false;
+        outTarget = *reinterpret_cast<uint64_t*>(base + Interact::targetRuntimeId);
         return true;
     }
 
     if (id == SDK::PacketID::PLAYER_AUTH_INPUT) {
-        auto txn = *reinterpret_cast<uintptr_t*>(base + 0xB0);
+        auto txn = *reinterpret_cast<uintptr_t*>(base + AuthInput::itemUseTransaction);
         if (!txn) return false;
-        if (*reinterpret_cast<uint32_t*>(txn + 0x70) != 1) return false;
-        outTarget = *reinterpret_cast<uint64_t*>(txn + 0x68);
+        if (*reinterpret_cast<uint32_t*>(txn + Txn::actionType) != Txn::actionAttack) return false;
+        outTarget = *reinterpret_cast<uint64_t*>(txn + Txn::targetRuntimeId);
         return true;
     }
 
@@ -1220,19 +1219,24 @@ void Backtrack::onRenderLevel(RenderLevelEvent&) {
     auto lp = ci->getLocalPlayer();
     if (!lp) return;
 
-    auto material = std::get<BoolValue>(throughWalls) ? SDK::MaterialPtr::getSelectionOverlayMaterial()
-                                                      : SDK::MaterialPtr::getSelectionBoxMaterial();
+    auto material = SDK::MaterialPtr::getUIColor();
     MCDrawUtil3D dc(ci->levelRenderer, SDK::ScreenContext::instance3d, material);
 
     bool onlyLast = std::get<BoolValue>(onlyLastRecord);
     auto baseCol = std::get<ColorValue>(hitboxColor).getMainColor();
     int style = hitboxStyle.getSelectedKey();
     float thickness = std::get<FloatValue>(hitboxThickness).value / 10.f;
+    bool doDecay = std::get<BoolValue>(decayRecords).value && !onlyLast;
+    float decayFloor = std::clamp(std::get<FloatValue>(decayMinAlpha).value, 0.f, 1.f);
+    float window = std::max(1.f, ghostAgeMs());
+    float fillScale = std::clamp(std::get<FloatValue>(fillOpacity).value, 0.f, 1.f);
+    bool seeThrough = std::get<BoolValue>(throughWalls).value;
+    SDK::BlockSource* region = seeThrough ? nullptr : ci->getRegion();
+    Vec3 viewEye = lp->getPos();
+    if (region) WallCheck::beginPass();
     std::vector<MCDrawUtil3D::ColoredBox> fills;
     std::vector<MCDrawUtil3D::ColoredThickBox> outlines;
 
-    // A box per ghost age per enemy -- no aiming required. Ages come from the same
-    // helper the target picker uses, so everything drawn here is hittable.
     auto snap = EntityCache::get().snapshot();
     fills.reserve(snap->views.size() * ghostAgeScratch.capacity());
     outlines.reserve(snap->views.size() * ghostAgeScratch.capacity());
@@ -1241,7 +1245,6 @@ void Backtrack::onRenderLevel(RenderLevelEvent&) {
         if (actor->isInvisible()) continue;
 
         uint64_t rid = actor->getRuntimeID();
-        // Per target, matching the picker: each player's window shifts independently.
         buildGhostAges(ghostAgeScratch, rid);
         for (float age : ghostAgeScratch) {
             bool fresh = false;
@@ -1253,10 +1256,19 @@ void Backtrack::onRenderLevel(RenderLevelEvent&) {
                 sample = findSample(rid, age, fresh);
             }
             if (!sample) continue;
+            if (region && !WallCheck::isVisible(region, viewEye, sample->box.getCenter())) continue;
 
-            d2d::Color col(baseCol);
-            if (style != style_outline) fills.push_back({ sample->box, col });
-            if (style != style_filled) outlines.push_back({ sample->box, thickness, col });
+            StoredColor shaded = baseCol;
+            if (doDecay) {
+                float t = std::clamp(age / window, 0.f, 1.f);
+                shaded.a = baseCol.a * std::lerp(1.f, decayFloor, t);
+            }
+            if (style != style_outline) {
+                StoredColor fillCol = shaded;
+                fillCol.a = shaded.a * fillScale;
+                fills.push_back({ sample->box, d2d::Color(fillCol) });
+            }
+            if (style != style_filled) outlines.push_back({ sample->box, thickness, d2d::Color(shaded) });
         }
     }
 

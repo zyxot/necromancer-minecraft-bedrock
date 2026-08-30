@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ItemCatalog.h"
+#include "mc/Addresses.h"
 #include "mc/common/world/Item.h"
 #include "mc/common/locale/I18n.h"
 #include <algorithm>
@@ -26,10 +27,10 @@ namespace {
         return value;
     }
 
-    constexpr size_t blockLegacyNamespacedIdOffset = 0xE0;
-    constexpr size_t blockLegacyBackPtrOffset = 0x68;
-    constexpr size_t maxProbeOffset = 0x260;
-    constexpr size_t maxStateProbeOffset = 0x400;
+    constexpr size_t blockLegacyNamespacedIdOffset = Signatures::FieldOffset::BlockLegacy::namespacedId;
+    constexpr size_t blockLegacyBackPtrOffset = Signatures::FieldOffset::BlockLegacy::backPtr;
+    constexpr size_t maxProbeOffset = Signatures::FieldOffset::BlockLegacy::maxProbe;
+    constexpr size_t maxStateProbeOffset = Signatures::FieldOffset::BlockLegacy::maxStateProbe;
 
     std::optional<void*> resolveLegacyBlock(SDK::Item* item, size_t offset, bool extraDeref) {
         auto candidate = safeReadAs<void*>(reinterpret_cast<char const*>(item) + offset);
@@ -76,10 +77,10 @@ void ItemCatalog::rebuild() {
     auto level = ci && ci->minecraft ? ci->minecraft->getLevel() : nullptr;
     if (!level) return;
 
-    void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
+    void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + Signatures::FieldOffset::Level::itemRegistry);
     if (!registry) return;
 
-    auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
+    auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + Signatures::FieldOffset::ItemRegistry::itemCounters);
     if (!itemCounters[0] || !itemCounters[1]) return;
 
     built = true;

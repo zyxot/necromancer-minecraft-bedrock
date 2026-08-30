@@ -4,6 +4,8 @@
 #include "Freelook.h"
 #include "client/event/events/ClickEvent.h"
 #include "client/event/events/AfterMoveEvent.h"
+#include "client/event/events/BeforeMoveEvent.h"
+#include "client/event/events/SendPacketEvent.h"
 #include "client/event/events/TurnDeltaEvent.h"
 #include "client/event/events/TickEvent.h"
 #include "client/misc/EntityCache.h"
@@ -20,6 +22,7 @@
 #include "mc/common/world/level/BlockSource.h"
 #include "mc/common/world/level/Dimension.h"
 #include <array>
+#include <cfloat>
 
 namespace {
     enum HitboxSlot : int {
@@ -155,27 +158,37 @@ namespace {
 Aimbot::Aimbot()
     : Module("Aimbot", LocalizeString::get("client.module.aimbot.name"),
              LocalizeString::get("client.module.aimbot.desc"), GAME, nokeybind) {
-    addSetting("players", LocalizeString::get("client.module.aimbot.players.name"),
-               LocalizeString::get("client.module.aimbot.players.desc"), players);
-    addSetting("mobs", LocalizeString::get("client.module.aimbot.mobs.name"),
-               LocalizeString::get("client.module.aimbot.mobs.desc"), mobs);
-    addSetting("priority", LocalizeString::get("client.module.aimbot.priority.name"),
-               LocalizeString::get("client.module.aimbot.priority.desc"), prioritizeTags);
-    addSetting("ignoreFriends", LocalizeString::get("client.module.aimbot.ignoreFriends.name"),
-               LocalizeString::get("client.module.aimbot.ignoreFriends.desc"), ignoreFriends);
-    addSetting("wallCheck", LocalizeString::get("client.module.aimbot.wallCheck.name"),
-               LocalizeString::get("client.module.aimbot.wallCheck.desc"), wallCheck);
-    addSetting("hitBehindWall", LocalizeString::get("client.module.aimbot.hitBehindWall.name"),
-               LocalizeString::get("client.module.aimbot.hitBehindWall.desc"), hitBehindWall);
+    aimMode.addEntry(EnumEntry(aim_normal, LocalizeString::get("client.module.aimbot.aimMode.normal.name"),
+                               LocalizeString::get("client.module.aimbot.aimMode.normal.desc")));
+    aimMode.addEntry(EnumEntry(aim_psilent, LocalizeString::get("client.module.aimbot.aimMode.psilent.name"),
+                               LocalizeString::get("client.module.aimbot.aimMode.psilent.desc")));
+    aimMode.addEntry(EnumEntry(aim_silent, LocalizeString::get("client.module.aimbot.aimMode.silent.name"),
+                               LocalizeString::get("client.module.aimbot.aimMode.silent.desc")));
+    addEnumSetting("aimMode", LocalizeString::get("client.module.aimbot.aimMode.name"),
+                   LocalizeString::get("client.module.aimbot.aimMode.desc"), aimMode);
 
-    addSetting("backtrackTarget", LocalizeString::get("client.module.aimbot.backtrackTarget.name"),
-               LocalizeString::get("client.module.aimbot.backtrackTarget.desc"), backtrackTarget, "players"_istrue);
+    Setting::Condition psilentCond(std::vector<Setting::SingleCond> {
+        { "aimMode", { aim_psilent }, false },
+    });
+    addSetting("psilentSprintHits", LocalizeString::get("client.module.aimbot.psilentSprintHits.name"),
+               LocalizeString::get("client.module.aimbot.psilentSprintHits.desc"), psilentSprintHits, psilentCond);
 
+    Setting::Condition silentCond(std::vector<Setting::SingleCond> {
+        { "aimMode", { aim_normal, aim_silent }, false },
+    });
     addSliderSetting("smoothSpeed", LocalizeString::get("client.module.aimbot.smoothSpeed.name"),
                      LocalizeString::get("client.module.aimbot.smoothSpeed.desc"), smoothSpeed, FloatValue(0.5f),
-                     FloatValue(100.f), FloatValue(0.5f));
+                     FloatValue(100.f), FloatValue(0.5f), silentCond);
     addSetting("lockOn", LocalizeString::get("client.module.aimbot.lockOn.name"),
-               LocalizeString::get("client.module.aimbot.lockOn.desc"), lockOn);
+               LocalizeString::get("client.module.aimbot.lockOn.desc"), lockOn, silentCond);
+    addSetting("silentRotSmooth", LocalizeString::get("client.module.aimbot.silentRotSmooth.name"),
+               LocalizeString::get("client.module.aimbot.silentRotSmooth.desc"), silentRotSmooth,
+               Setting::Condition(std::vector<Setting::SingleCond> {
+                   { "aimMode", { aim_silent }, false },
+               }));
+
+    addSetting("allBodyParts", LocalizeString::get("client.module.aimbot.allBodyParts.name"),
+               LocalizeString::get("client.module.aimbot.allBodyParts.desc"), allBodyParts);
 
     addSliderSetting("range", LocalizeString::get("client.module.aimbot.range.name"),
                      LocalizeString::get("client.module.aimbot.range.desc"), range, FloatValue(1.f), FloatValue(15.f),
@@ -190,27 +203,6 @@ Aimbot::Aimbot()
     addEnumSetting("targetMode", LocalizeString::get("client.module.aimbot.targetMode.name"),
                    LocalizeString::get("client.module.aimbot.targetMode.desc"), targetMode);
 
-    hitbox.addEntry(EnumEntry(SlotHead, LocalizeString::get("client.module.aimbot.hitbox.head.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.head.desc")));
-    hitbox.addEntry(EnumEntry(SlotNeck, LocalizeString::get("client.module.aimbot.hitbox.neck.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.neck.desc")));
-    hitbox.addEntry(EnumEntry(SlotChest, LocalizeString::get("client.module.aimbot.hitbox.chest.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.chest.desc")));
-    hitbox.addEntry(EnumEntry(SlotBody, LocalizeString::get("client.module.aimbot.hitbox.body.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.body.desc")));
-    hitbox.addEntry(EnumEntry(SlotStomach, LocalizeString::get("client.module.aimbot.hitbox.stomach.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.stomach.desc")));
-    hitbox.addEntry(EnumEntry(SlotLegs, LocalizeString::get("client.module.aimbot.hitbox.legs.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.legs.desc")));
-    hitbox.addEntry(EnumEntry(SlotFeet, LocalizeString::get("client.module.aimbot.hitbox.feet.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.feet.desc")));
-    hitbox.addEntry(EnumEntry(SlotAuto, LocalizeString::get("client.module.aimbot.hitbox.auto.name"),
-                              LocalizeString::get("client.module.aimbot.hitbox.auto.desc")));
-    hitbox.setSelectedKey(SlotBody);
-    addEnumSetting("hitbox", LocalizeString::get("client.module.aimbot.hitbox.name"),
-                   LocalizeString::get("client.module.aimbot.hitbox.desc"), hitbox)
-        ->defaultValue = EnumValue(SlotBody);
-
     Setting::Condition fovCond(std::vector<Setting::SingleCond> {
         { "targetMode", { 1 }, false },
     });
@@ -223,12 +215,83 @@ Aimbot::Aimbot()
                      LocalizeString::get("client.module.aimbot.fovWidth.desc"), fovWidth, FloatValue(0.5f),
                      FloatValue(5.f), FloatValue(0.5f), fovCond);
 
+    auto addHitboxEntries = [](EnumData& e) {
+        e.addEntry(EnumEntry(SlotHead, LocalizeString::get("client.module.aimbot.hitbox.head.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.head.desc")));
+        e.addEntry(EnumEntry(SlotNeck, LocalizeString::get("client.module.aimbot.hitbox.neck.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.neck.desc")));
+        e.addEntry(EnumEntry(SlotChest, LocalizeString::get("client.module.aimbot.hitbox.chest.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.chest.desc")));
+        e.addEntry(EnumEntry(SlotBody, LocalizeString::get("client.module.aimbot.hitbox.body.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.body.desc")));
+        e.addEntry(EnumEntry(SlotStomach, LocalizeString::get("client.module.aimbot.hitbox.stomach.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.stomach.desc")));
+        e.addEntry(EnumEntry(SlotLegs, LocalizeString::get("client.module.aimbot.hitbox.legs.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.legs.desc")));
+        e.addEntry(EnumEntry(SlotFeet, LocalizeString::get("client.module.aimbot.hitbox.feet.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.feet.desc")));
+        e.addEntry(EnumEntry(SlotAuto, LocalizeString::get("client.module.aimbot.hitbox.auto.name"),
+                             LocalizeString::get("client.module.aimbot.hitbox.auto.desc")));
+    };
+
+    addHitboxEntries(hitbox);
+    hitbox.setSelectedKey(SlotAuto);
+    addEnumSetting("hitbox", LocalizeString::get("client.module.aimbot.hitbox.name"),
+                   LocalizeString::get("client.module.aimbot.hitbox.desc"), hitbox)
+        ->defaultValue = EnumValue(SlotAuto);
+    {
+        Setting* hb = nullptr;
+        settings->forEach([&](std::shared_ptr<Setting> s) {
+            if (!hb && s->name() == "hitbox") hb = s.get();
+        });
+        if (hb) hb->multiSelect = true;
+    }
+
+    addSetting("backtrackTarget", LocalizeString::get("client.module.aimbot.backtrackTarget.name"),
+               LocalizeString::get("client.module.aimbot.backtrackTarget.desc"), backtrackTarget, "players"_istrue);
+    addSetting("lagRecordsOnly", LocalizeString::get("client.module.aimbot.lagRecordsOnly.name"),
+               LocalizeString::get("client.module.aimbot.lagRecordsOnly.desc"), lagRecordsOnly,
+               Setting::Condition(std::vector<Setting::SingleCond> {
+                   { "players", { 1 }, false },
+                   { "backtrackTarget", { 1 }, false },
+               }));
+    addSetting("backtrackHitboxSame", LocalizeString::get("client.module.aimbot.backtrackHitboxSame.name"),
+               LocalizeString::get("client.module.aimbot.backtrackHitboxSame.desc"), backtrackHitboxSame,
+               "backtrackTarget"_istrue);
+    addHitboxEntries(backtrackHitbox);
+    backtrackHitbox.setSelectedKey(SlotAuto);
+    addEnumSetting("backtrackHitbox", LocalizeString::get("client.module.aimbot.backtrackHitbox.name"),
+                   LocalizeString::get("client.module.aimbot.backtrackHitbox.desc"), backtrackHitbox,
+                   Setting::Condition(std::vector<Setting::SingleCond> {
+                       { "backtrackTarget", { 1 }, false },
+                       { "backtrackHitboxSame", { 0 }, false },
+                   }))
+        ->defaultValue = EnumValue(SlotAuto);
+
+    addSetting("players", LocalizeString::get("client.module.aimbot.players.name"),
+               LocalizeString::get("client.module.aimbot.players.desc"), players);
+    addSetting("mobs", LocalizeString::get("client.module.aimbot.mobs.name"),
+               LocalizeString::get("client.module.aimbot.mobs.desc"), mobs);
+    addSetting("priority", LocalizeString::get("client.module.aimbot.priority.name"),
+               LocalizeString::get("client.module.aimbot.priority.desc"), prioritizeTags);
+    addSetting("ignoreFriends", LocalizeString::get("client.module.aimbot.ignoreFriends.name"),
+               LocalizeString::get("client.module.aimbot.ignoreFriends.desc"), ignoreFriends);
+    addSetting("ignoreInvulnerable", LocalizeString::get("client.module.aimbot.ignoreInvulnerable.name"),
+               LocalizeString::get("client.module.aimbot.ignoreInvulnerable.desc"), ignoreInvulnerable);
+    addSetting("wallCheck", LocalizeString::get("client.module.aimbot.wallCheck.name"),
+               LocalizeString::get("client.module.aimbot.wallCheck.desc"), wallCheck);
+    addSetting("hitBehindWall", LocalizeString::get("client.module.aimbot.hitBehindWall.name"),
+               LocalizeString::get("client.module.aimbot.hitBehindWall.desc"), hitBehindWall);
+
     listen<UpdateEvent>(&Aimbot::onUpdate);
     listen<UpdatePlayerCameraEvent>((EventListenerFunc)&Aimbot::onCameraUpdate, false, 1);
     listen<TurnDeltaEvent>((EventListenerFunc)&Aimbot::onTurnDelta);
     listen<CinematicCameraEvent>((EventListenerFunc)&Aimbot::onCinematicCamera, false, -100);
     listen<ClickEvent>(&Aimbot::onClick, false, 10);
     listen<AfterMoveEvent>(&Aimbot::onAfterMove, false, 10);
+    listen<BeforeMoveEvent>(&Aimbot::onBeforeMove, false, 10);
+    listen<SendPacketEvent>(&Aimbot::onSendPacket, false, 20);
+    listen<AfterMoveEvent>(&Aimbot::onAfterMovePartBurst, false, 12);
     Eventing::get().listen<RenderOverlayEvent, &Aimbot::onRenderOverlay>(this);
     listen<RendererCleanupEvent>(&Aimbot::onRendererCleanup, true);
 }
@@ -236,6 +299,68 @@ Aimbot::Aimbot()
 void Aimbot::afterLoadConfig() {
     int selected = hitbox.getSelectedKey();
     if (selected < 0 || selected > SlotAuto) hitbox.setSelectedKey(SlotAuto);
+}
+
+int Aimbot::selectedHitboxes(bool ghost, int* outSlots, int maxSlots) {
+    if (maxSlots < 1) return 0;
+
+    if (ghost && !std::get<BoolValue>(backtrackHitboxSame).value) {
+        int slot = backtrackHitbox.getSelectedKey();
+        if (slot < 0 || slot > SlotAuto) slot = SlotAuto;
+        outSlots[0] = slot;
+        return 1;
+    }
+
+    int selected = hitbox.getSelectedKey();
+    if (selected < 0x100) {
+        int slot = selected;
+        if (slot < 0 || slot > SlotAuto) slot = SlotAuto;
+        outSlots[0] = slot;
+        return 1;
+    }
+
+    int mask = selected & 0xFF;
+    if (mask == 0 || (mask & (1 << SlotAuto))) {
+        outSlots[0] = SlotAuto;
+        return 1;
+    }
+
+    int count = 0;
+    for (int slot = 0; slot < anchorCount && count < maxSlots; slot++) {
+        if (mask & (1 << slot)) outSlots[count++] = slot;
+    }
+    if (count == 0) {
+        outSlots[0] = SlotBody;
+        return 1;
+    }
+    return count;
+}
+
+Vec3 Aimbot::bestFracForSelection(AABB const& bounds, Vec3 const& eye, SDK::BlockSource* region, bool ghost) {
+    constexpr int maxSlots = 8;
+    int slots[maxSlots];
+    int count = selectedHitboxes(ghost, slots, maxSlots);
+    if (count < 1) return closestFrac(bounds, eye);
+
+    if (count == 1 && slots[0] == SlotAuto) {
+        auto frac = resolveAutoFrac(bounds, eye, region);
+        return frac ? *frac : closestFrac(bounds, eye);
+    }
+
+    if (count == 1) return fracForSlot(slots[0]);
+
+    int bestSlot = slots[0];
+    float bestDist = FLT_MAX;
+    for (int i = 0; i < count; i++) {
+        Vec3 point = boxPoint(bounds, fracForSlot(slots[i]));
+        float dist = eye.distance(point);
+        if (region && WallCheck::isVisible(region, eye, point)) dist -= 100.f;
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestSlot = slots[i];
+        }
+    }
+    return fracForSlot(bestSlot);
 }
 
 Backtrack* Aimbot::resolveBacktrack() {
@@ -256,8 +381,13 @@ void Aimbot::onDisable() {
     currentTargetBox = {};
     currentTargetRecordAgeMs = -1.f;
     pendingAttack = {};
+    partBurst.clear();
     haveCurrentAimFrac = false;
+    psilentActive = false;
+    publishPSilentLock(0, AABB {}, Vec3 {}, false);
+    psilentTouchArmed.store(false, std::memory_order_release);
     commandActive = false;
+    silentRotActive = false;
     injectingTurn.store(false, std::memory_order_release);
     userInput.store(0.f, std::memory_order_release);
     lastFrame = {};
@@ -279,8 +409,12 @@ void Aimbot::onUpdate(Event&) {
         currentTargetBox = {};
         currentTargetRecordAgeMs = -1.f;
         pendingAttack = {};
+        partBurst.clear();
         haveCurrentAimFrac = false;
+        psilentActive = false;
+        publishPSilentLock(0, AABB {}, Vec3 {}, false);
         commandActive = false;
+        silentRotActive = false;
             lastFrame = {};
         lastCorrectionFrame = UINT64_MAX;
         std::lock_guard lock { aimMutex };
@@ -297,8 +431,12 @@ void Aimbot::onUpdate(Event&) {
         currentTargetBox = {};
         currentTargetRecordAgeMs = -1.f;
         pendingAttack = {};
+        partBurst.clear();
         haveCurrentAimFrac = false;
+        psilentActive = false;
+        publishPSilentLock(0, AABB {}, Vec3 {}, false);
         commandActive = false;
+        silentRotActive = false;
             lastFrame = {};
         lastCorrectionFrame = UINT64_MAX;
         std::lock_guard lock { aimMutex };
@@ -316,7 +454,6 @@ void Aimbot::onUpdate(Event&) {
     bool doLockOn = std::get<BoolValue>(lockOn);
     float maxRange = std::get<FloatValue>(range).value;
     int targetModeKey = targetMode.getSelectedKey();
-    int hitboxMode = hitbox.getSelectedKey();
     float fovDeg = std::get<FloatValue>(fov).value;
 
     uint64_t retainedId;
@@ -331,11 +468,13 @@ void Aimbot::onUpdate(Event&) {
     SDK::BlockSource* region = (doWallCheck || doHitBehindWall) ? ci->getRegion() : nullptr;
     if (region) WallCheck::beginPass();
 
-    int probeSlot = hitboxMode == SlotAuto ? SlotBody : hitboxMode;
     candidates.clear();
 
     bool doGhost = std::get<BoolValue>(backtrackTarget) && doPlayers;
     Backtrack* bt = doGhost ? resolveBacktrack() : nullptr;
+    // Lag records only: mobs never have records, so requiring one excludes them entirely.
+    bool recordsOnly = doGhost && std::get<BoolValue>(lagRecordsOnly).value;
+    bool skipInvulnerable = std::get<BoolValue>(ignoreInvulnerable).value;
 
     auto snap = EntityCache::get().snapshot();
     for (auto const& view : snap->views) {
@@ -356,18 +495,23 @@ void Aimbot::onUpdate(Event&) {
             priority = PlayerListManager::get().getPriority(reinterpret_cast<SDK::Player*>(entt)->playerName);
         }
 
+        // A target inside its damage-immunity window cannot take a hit; the 10-tick
+        // (0.5s) i-frame counter is invulnerableTime. Attacking through it is wasted
+        // and looks like a miss, so optionally skip them until it drains.
+        if (skipInvulnerable && entt->invulnerableTime > 5) continue;
+
         std::vector<Backtrack::GhostRecord> ghostRecords;
         bool haveGhostRecords = bt && isPlayer && bt->getGhostRecords(view.runtimeId, ghostRecords);
+        if (recordsOnly && !haveGhostRecords) continue;
 
         auto consider = [&](AABB const& bounds, bool isGhost, float recordAgeMs) {
             float distance = eye.distance(bounds.getCenter());
             if (distance > maxRange) return;
 
             bool sameTarget = retainedId != 0 && view.runtimeId == retainedId && isGhost == currentTargetGhost;
-            bool lockedFrac = doLockOn && sameTarget && haveCurrentAimFrac && hitboxMode == SlotAuto;
+            bool lockedFrac = doLockOn && sameTarget && haveCurrentAimFrac;
 
-            Vec3 probeFrac = lockedFrac ? currentAimFrac
-                                        : (hitboxMode == SlotAuto ? closestFrac(bounds, eye) : fracForSlot(probeSlot));
+            Vec3 probeFrac = lockedFrac ? currentAimFrac : bestFracForSelection(bounds, eye, nullptr, isGhost);
             Vec3 aimPoint = boxPoint(bounds, probeFrac);
             Vec3 direction = (aimPoint - eye).normalized();
             float angle =
@@ -389,7 +533,7 @@ void Aimbot::onUpdate(Event&) {
             candidates.push_back({ entt, score, priority, isRetained, isGhost, bounds, probeFrac, recordAgeMs });
         };
 
-        consider(entt->getBoundingBox(), false, -1.f);
+        if (!recordsOnly) consider(entt->getBoundingBox(), false, -1.f);
         if (haveGhostRecords) {
             for (auto const& record : ghostRecords) consider(record.box, true, record.ageMs);
         }
@@ -402,7 +546,7 @@ void Aimbot::onUpdate(Event&) {
     });
 
     SDK::Actor* target = nullptr;
-    Vec3 resolvedFrac = fracForSlot(probeSlot);
+    Vec3 resolvedFrac { 0.5f, 0.55f, 0.5f };
     bool targetIsGhost = false;
     bool targetObstructed = false;
     AABB targetGhostBox {};
@@ -411,19 +555,33 @@ void Aimbot::onUpdate(Event&) {
     for (auto const& candidate : candidates) {
         AABB const& bounds = candidate.bounds;
 
-        if (hitboxMode == SlotAuto) {
-            if (doLockOn && candidate.retained && haveCurrentAimFrac &&
-                (!region || !enforceWallCheck || WallCheck::isVisible(region, eye, boxPoint(bounds, candidate.frac)))) {
-                resolvedFrac = candidate.frac;
-            } else {
+        if (doLockOn && candidate.retained && haveCurrentAimFrac &&
+            (!region || !enforceWallCheck || WallCheck::isVisible(region, eye, boxPoint(bounds, candidate.frac)))) {
+            resolvedFrac = candidate.frac;
+        } else {
+            constexpr int maxSlots = 8;
+            int slots[maxSlots];
+            int slotCount = selectedHitboxes(candidate.isGhost, slots, maxSlots);
+            bool isAuto = slotCount == 1 && slots[0] == SlotAuto;
+
+            if (isAuto) {
                 auto frac = resolveAutoFrac(bounds, eye, enforceWallCheck ? region : nullptr);
                 if (!frac) continue;
                 resolvedFrac = *frac;
+            } else {
+                resolvedFrac = bestFracForSelection(bounds, eye, nullptr, candidate.isGhost);
+                if (region && enforceWallCheck &&
+                    !WallCheck::isVisible(region, eye, boxPoint(bounds, resolvedFrac))) {
+                    bool found = false;
+                    for (int i = 0; i < slotCount && !found; i++) {
+                        if (WallCheck::isVisible(region, eye, boxPoint(bounds, fracForSlot(slots[i])))) {
+                            resolvedFrac = fracForSlot(slots[i]);
+                            found = true;
+                        }
+                    }
+                    if (!found) continue;
+                }
             }
-        } else {
-            Vec3 frac = fracForSlot(hitboxMode);
-            if (region && enforceWallCheck && !WallCheck::isVisible(region, eye, boxPoint(bounds, frac))) continue;
-            resolvedFrac = frac;
         }
 
         target = candidate.actor;
@@ -442,8 +600,12 @@ void Aimbot::onUpdate(Event&) {
         currentTargetBox = {};
         currentTargetRecordAgeMs = -1.f;
         pendingAttack = {};
+        partBurst.clear();
         haveCurrentAimFrac = false;
+        psilentActive = false;
+        publishPSilentLock(0, AABB {}, Vec3 {}, false);
         commandActive = false;
+        silentRotActive = false;
             lastFrame = {};
         lastCorrectionFrame = UINT64_MAX;
         std::lock_guard lock { aimMutex };
@@ -493,6 +655,7 @@ void Aimbot::onCameraUpdate(Event&) {
     }
     if (targetId == 0) {
         commandActive = false;
+        silentRotActive = false;
             lastFrame = {};
         lastCorrectionFrame = UINT64_MAX;
         userInput.store(0.f, std::memory_order_release);
@@ -502,6 +665,7 @@ void Aimbot::onCameraUpdate(Event&) {
     SDK::Actor* target = EntityCache::get().findByRuntimeID(targetId);
     if (!target) {
         commandActive = false;
+        silentRotActive = false;
             lastFrame = {};
         lastCorrectionFrame = UINT64_MAX;
         return;
@@ -547,6 +711,24 @@ void Aimbot::onCameraUpdate(Event&) {
         std::atan2(direction.z, direction.x) * (180.f / pi_f) - 90.f,
     };
     desired.x = std::clamp(desired.x, -89.9f, 89.9f);
+    desired.y = wrapAngle(desired.y);
+
+    if (aimMode.getSelectedKey() == aim_psilent) {
+        psilentActive = true;
+        // Publish for the game thread. bounds/aimPoint here are already the
+        // interpolated ones used for the shot, and ghosts are never valid PSilent
+        // targets because the touch data has to match the live model.
+        publishPSilentLock(targetId, bounds, aimPoint, !usingGhost);
+        commandActive = false;
+        silentRotActive = false;
+        lastFrame = {};
+        lastCorrectionFrame = UINT64_MAX;
+        return;
+    }
+    psilentActive = false;
+    publishPSilentLock(0, AABB {}, Vec3 {}, false);
+
+    bool silentMode = aimMode.getSelectedKey() == aim_silent;
 
     if (!freelookResolved) {
         auto mod = Necromancer::getModuleManager().find("Freelook");
@@ -568,14 +750,47 @@ void Aimbot::onCameraUpdate(Event&) {
     lastFrame = now;
 
     if (!commandActive) {
-        commandedRot = freelook ? freelook->getPinnedRot() : lp->getRot();
+        commandedRot = silentMode ? Vec2 { desired.x, wrapAngle(desired.y) }
+                                  : (freelook ? freelook->getPinnedRot() : lp->getRot());
         commandActive = true;
+        if (silentMode) {
+            std::lock_guard lock { aimMutex };
+            desiredSilentRot = commandedRot;
+        }
     }
 
     Vec2 error { desired.x - commandedRot.x, wrapAngle(desired.y - commandedRot.y) };
     float errorMagnitude = std::hypot(error.x, error.y);
     bool gripping = std::get<BoolValue>(lockOn) && errorMagnitude <= 5.f;
     float response = std::clamp(std::get<FloatValue>(smoothSpeed).value, 0.5f, 100.f);
+
+    if (silentMode) {
+        // Silent never touches the local camera, so the turn-delta injector below
+        // is skipped entirely; only the server-facing rotation state advances.
+        if (std::get<BoolValue>(silentRotSmooth)) {
+            if (response < snapSpeedThreshold && !gripping && errorMagnitude <= 0.3f) {
+                silentRotActive = true;
+                return;
+            }
+            if (!hadPreviousFrame) return;
+
+            float alpha = response >= snapSpeedThreshold
+                ? std::lerp(1.f - std::exp(-response * dt), 1.f,
+                            std::clamp((response - snapSpeedThreshold) / (100.f - snapSpeedThreshold), 0.f, 1.f))
+                : 1.f - std::exp(-response * dt);
+            Vec2 correction { error.x * alpha, error.y * alpha };
+            commandedRot.x = std::clamp(commandedRot.x + correction.x, -89.9f, 89.9f);
+            commandedRot.y = wrapAngle(commandedRot.y + correction.y);
+        } else {
+            commandedRot = Vec2 { desired.x, wrapAngle(desired.y) };
+        }
+
+        silentRotActive = true;
+        std::lock_guard lock { aimMutex };
+        desiredSilentRot = commandedRot;
+        return;
+    }
+
     if (response < snapSpeedThreshold && !gripping && errorMagnitude <= 0.3f) return;
 
     if (!hadPreviousFrame) return;
@@ -645,9 +860,10 @@ void Aimbot::onClick(Event& evGeneric) {
 
     std::lock_guard controllerLock { controllerMutex };
     bool allowWallAttack = std::get<BoolValue>(hitBehindWall);
+    bool psilent = aimMode.getSelectedKey() == aim_psilent && psilentActive;
     bool redirectGhost = currentTargetGhost;
     bool redirectWall = allowWallAttack && currentTargetObstructed;
-    if (!currentTargetId || (!redirectGhost && !redirectWall) || pendingAttack.active) return;
+    if (!currentTargetId || (!redirectGhost && !redirectWall && !psilent) || pendingAttack.active) return;
     if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) return;
 
     auto ci = SDK::ClientInstance::get();
@@ -674,6 +890,7 @@ void Aimbot::onAfterMove(Event&) {
         if (!pendingAttack.active) return;
         attack = pendingAttack;
         pendingAttack = {};
+        partBurst.clear();
     }
 
     auto ci = SDK::ClientInstance::get();
@@ -694,6 +911,305 @@ void Aimbot::onAfterMove(Event&) {
     }
 
     TargetManager::setTarget(target);
+}
+
+namespace {
+    float wrapYaw(float a) {
+        while (a > 180.f) a -= 360.f;
+        while (a < -180.f) a += 360.f;
+        return a;
+    }
+
+    Vec2 rotationTo(Vec3 const& from, Vec3 const& to) {
+        Vec3 dir = to - from;
+        float len = dir.magnitude();
+        if (len < 0.0001f) return Vec2 { 0.f, 0.f };
+        dir = dir * (1.f / len);
+        float pitch = std::clamp(-std::asin(std::clamp(dir.y, -1.f, 1.f)) * (180.f / pi_f), -89.9f, 89.9f);
+        float yaw = wrapYaw(std::atan2(dir.z, dir.x) * (180.f / pi_f) - 90.f);
+        return Vec2 { pitch, yaw };
+    }
+}
+
+void Aimbot::publishPSilentLock(uint64_t runtimeID, AABB const& box, Vec3 const& hitPoint, bool valid) {
+    uint32_t start = psilentSeq.load(std::memory_order_relaxed);
+    psilentSeq.store(start + 1, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_release);
+    psilentShared.runtimeID = runtimeID;
+    psilentShared.box = box;
+    psilentShared.hitPoint = hitPoint;
+    psilentShared.valid = valid;
+    std::atomic_thread_fence(std::memory_order_release);
+    psilentSeq.store(start + 2, std::memory_order_release);
+}
+
+bool Aimbot::loadPSilentLock(PSilentLock& out) const {
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        uint32_t before = psilentSeq.load(std::memory_order_acquire);
+        if (before & 1u) continue;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        out = psilentShared;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (psilentSeq.load(std::memory_order_acquire) == before) return out.valid;
+    }
+    return false;
+}
+
+bool Aimbot::observeAttack(SDK::Packet* packet, uint64_t& outTarget) {
+    if (!packet || packet->getID() != SDK::PacketID::PLAYER_AUTH_INPUT) return false;
+
+    auto base = reinterpret_cast<uintptr_t>(packet);
+    using AuthInput = Signatures::FieldOffset::PlayerAuthInputPacket;
+
+    auto txn = *reinterpret_cast<uintptr_t*>(base + AuthInput::itemUseTransaction);
+    if (!txn) return false;
+    using Txn = Signatures::FieldOffset::ItemUseTransaction;
+    if (*reinterpret_cast<uint32_t*>(txn + Txn::actionType) != Txn::actionAttack) return false;
+
+    outTarget = *reinterpret_cast<uint64_t*>(txn + Txn::targetRuntimeId);
+    return outTarget != 0;
+}
+
+void Aimbot::queuePartBurst(uint64_t runtimeID, AABB const& box, Vec3 const& aimPoint, float recordAgeMs,
+                            bool ghost) {
+    auto ci = SDK::ClientInstance::get();
+    auto* lp = ci ? ci->getLocalPlayer() : nullptr;
+    if (!lp) return;
+
+    Vec3 eye = poseAwareEye(lp, lp->getPos());
+    if (eye.distance(aimPoint) > 8.f) return;
+
+    auto* target = EntityCache::get().findByRuntimeID(runtimeID);
+    if (!target) return;
+    if (auto hp = target->getHealth(); !hp || *hp <= 0.f) return;
+
+    int startSlot = nextBurstSlot;
+    for (int i = 0; i < anchorCount; i++) {
+        int slot = (startSlot + i) % anchorCount;
+        Vec3 frac = fracForSlot(slot);
+        Vec3 point = boxPoint(box, frac);
+        if ((point - aimPoint).magnitude() < 0.001f) continue;
+
+        PartBurst burst;
+        burst.runtimeID = runtimeID;
+        burst.box = box;
+        burst.hitPoint = boxPoint(box, frac);
+        burst.recordAgeMs = recordAgeMs;
+        burst.ghost = ghost;
+        burst.fireAt = burstClock + i + 1;
+        burst.live = true;
+        partBurst.push_back(std::move(burst));
+    }
+    nextBurstSlot = (startSlot + anchorCount) % anchorCount;
+    while (partBurst.size() > 48) partBurst.pop_front();
+}
+
+void Aimbot::processPartBurst() {
+    if (partBurst.empty()) return;
+
+    burstClock++;
+
+    auto ci = SDK::ClientInstance::get();
+    auto* lp = ci ? ci->getLocalPlayer() : nullptr;
+    if (!lp || !lp->gameMode) {
+        partBurst.clear();
+        return;
+    }
+
+    auto* bt = resolveBacktrack();
+    std::optional<Vec2> armedDir;
+
+    for (auto it = partBurst.begin(); it != partBurst.end();) {
+        if (it->fireAt > burstClock) {
+            ++it;
+            continue;
+        }
+
+        auto* target = EntityCache::get().findByRuntimeID(it->runtimeID);
+        if (!target || !target->aabbShape) {
+            it = partBurst.erase(it);
+            continue;
+        }
+        if (auto hp = target->getHealth(); !hp || *hp <= 0.f) {
+            it = partBurst.erase(it);
+            continue;
+        }
+
+        Vec3 clickPos = it->hitPoint;
+
+        if (it->ghost) {
+            if (bt && bt->queueGhostAttack(it->runtimeID, it->box, clickPos, it->recordAgeMs, true)) {
+                it = partBurst.erase(it);
+                continue;
+            }
+            it = partBurst.erase(it);
+            continue;
+        }
+
+        if (!Signatures::GameMode_attack.result) {
+            it = partBurst.erase(it);
+            continue;
+        }
+
+        if (bt) bt->allowDirectAttack(it->runtimeID);
+
+        Vec3 eye = poseAwareEye(lp, lp->getPos());
+        auto* input = lp->getMoveInputComponent();
+        if (input && !armedDir) {
+            Vec3 dir = clickPos - eye;
+            float len = dir.magnitude();
+            if (len > 0.0001f) {
+                dir = dir * (1.f / len);
+                float pitch = std::clamp(-std::asin(std::clamp(dir.y, -1.f, 1.f)) * (180.f / pi_f), -89.9f, 89.9f);
+                float yaw = std::atan2(dir.z, dir.x) * (180.f / pi_f) - 90.f;
+                while (yaw > 180.f) yaw -= 360.f;
+                while (yaw < -180.f) yaw += 360.f;
+                armedDir = Vec2 { pitch, yaw };
+                input->interactDir = *armedDir;
+            }
+        }
+
+        using GameModeAttackFn = __int64 (*)(void*, SDK::Actor*, char, Vec3*);
+        reinterpret_cast<GameModeAttackFn>(Signatures::GameMode_attack.result)(lp->gameMode, target, 0, &clickPos);
+
+        it = partBurst.erase(it);
+    }
+}
+
+void Aimbot::onBeforeMove(Event& evGeneric) {
+    if (aimMode.getSelectedKey() != aim_psilent) return;
+
+    auto& ev = reinterpret_cast<BeforeMoveEvent&>(evGeneric);
+    SDK::MoveInputComponent* input = ev.getMoveInputHandler();
+    if (!input) return;
+
+    PSilentLock lock {};
+    if (!loadPSilentLock(lock)) {
+        psilentTouchArmed.store(false, std::memory_order_release);
+        return;
+    }
+    Vec3 hitPoint = lock.hitPoint;
+
+    auto ci = SDK::ClientInstance::get();
+    auto* lp = ci ? ci->getLocalPlayer() : nullptr;
+    if (!lp) {
+        psilentTouchArmed.store(false, std::memory_order_release);
+        return;
+    }
+
+    Vec2 touchDir = rotationTo(poseAwareEye(lp, lp->getPos()), hitPoint);
+    input->interactDir = touchDir;
+    psilentTouchDir = touchDir;
+    psilentTouchArmed.store(true, std::memory_order_release);
+}
+
+void Aimbot::onSendPacket(Event& evGeneric) {
+    auto& ev = reinterpret_cast<SendPacketEvent&>(evGeneric);
+    auto* packet = ev.getPacket();
+    if (!packet || ev.isCancelled()) return;
+
+    int mode = aimMode.getSelectedKey();
+    if (mode == aim_normal || mode == aim_silent) {
+        if (std::get<BoolValue>(allBodyParts).value) {
+            uint64_t attackTarget = 0;
+            if (observeAttack(packet, attackTarget)) {
+                queuePartBurst(attackTarget, currentTargetBox, boxPoint(currentTargetBox, currentAimFrac),
+                               currentTargetRecordAgeMs, currentTargetGhost);
+            }
+        }
+    }
+
+    if (packet->getID() != SDK::PacketID::PLAYER_AUTH_INPUT) return;
+
+    if (aimMode.getSelectedKey() == aim_silent) {
+        if (silentRotActive) {
+            Vec2 silentRot {};
+            {
+                std::lock_guard lock { aimMutex };
+                silentRot = desiredSilentRot;
+            }
+            auto base = reinterpret_cast<uintptr_t>(packet);
+            using AuthInput = Signatures::FieldOffset::PlayerAuthInputPacket;
+            auto* rot = reinterpret_cast<float*>(base + AuthInput::rot);
+            rot[0] = silentRot.x;
+            rot[1] = silentRot.y;
+            *reinterpret_cast<float*>(base + AuthInput::yHeadRot) = silentRot.y;
+        }
+        return;
+    }
+
+    if (aimMode.getSelectedKey() != aim_psilent) return;
+    if (!psilentTouchArmed.load(std::memory_order_acquire)) return;
+
+    PSilentLock lock {};
+    if (!loadPSilentLock(lock)) return;
+    uint64_t lockId = lock.runtimeID;
+    Vec3 hitPoint = lock.hitPoint;
+
+    auto base = reinterpret_cast<uintptr_t>(packet);
+
+    using AuthInput = Signatures::FieldOffset::PlayerAuthInputPacket;
+    using Txn = Signatures::FieldOffset::ItemUseTransaction;
+
+    auto txn = *reinterpret_cast<uintptr_t*>(base + AuthInput::itemUseTransaction);
+    if (!txn) return;
+    if (*reinterpret_cast<uint32_t*>(txn + Txn::actionType) != Txn::actionAttack) return;
+    if (*reinterpret_cast<uint64_t*>(txn + Txn::targetRuntimeId) != lockId) return;
+
+    auto ci = SDK::ClientInstance::get();
+    auto* lp = ci ? ci->getLocalPlayer() : nullptr;
+    if (!lp) return;
+
+    if (std::get<BoolValue>(psilentSprintHits).value) {
+        auto* input = lp->getMoveInputComponent();
+        bool sprinting = input && (input->sprinting || input->rawInputState.sprintDown || input->inputState.sprintDown);
+        if (sprinting) {
+            constexpr uint64_t sprintDownBit = 1ull << 4;
+            constexpr uint64_t sprintingBit = 1ull << 20;
+            constexpr uint64_t startSprintBit = 1ull << 25;
+            constexpr uint64_t stopSprintBit = 1ull << 26;
+            auto* inputData = reinterpret_cast<uint64_t*>(base + AuthInput::inputData);
+            *inputData |= sprintDownBit | sprintingBit | startSprintBit;
+            *inputData &= ~stopSprintBit;
+        }
+    }
+
+    Vec3 eye = poseAwareEye(lp, lp->getPos());
+
+    auto* interact = reinterpret_cast<float*>(base + AuthInput::interactRotation);
+    interact[0] = psilentTouchDir.x;
+    interact[1] = psilentTouchDir.y;
+
+    auto* fromPos = reinterpret_cast<float*>(txn + Txn::fromPos);
+    fromPos[0] = eye.x;
+    fromPos[1] = eye.y;
+    fromPos[2] = eye.z;
+    auto* clickPos = reinterpret_cast<float*>(txn + Txn::clickPos);
+    clickPos[0] = hitPoint.x;
+    clickPos[1] = hitPoint.y;
+    clickPos[2] = hitPoint.z;
+
+    if (std::get<BoolValue>(allBodyParts).value) {
+        queuePartBurst(lockId, lock.box, hitPoint, -1.f, false);
+    }
+}
+
+bool Aimbot::isPSilent() {
+    return isEnabled() && aimMode.getSelectedKey() == aim_psilent;
+}
+
+void Aimbot::onAfterMovePartBurst(Event&) {
+    processPartBurst();
+}
+
+bool Aimbot::getPSilentLock(uint64_t& outRuntimeID, AABB& outBox, Vec3& outHitPoint) {
+    if (!isPSilent()) return false;
+    PSilentLock lock {};
+    if (!loadPSilentLock(lock)) return false;
+    outRuntimeID = lock.runtimeID;
+    outBox = lock.box;
+    outHitPoint = lock.hitPoint;
+    return true;
 }
 
 void Aimbot::onRenderOverlay(RenderOverlayEvent& ev) {

@@ -1,6 +1,7 @@
 #pragma once
 #include "client/feature/module/Module.h"
 #include <chrono>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -18,11 +19,39 @@ public:
     void onEnable() override;
     void onDisable() override;
 
+    bool hasCustomItem(std::string const& id) const;
+    void addCustomItem(std::string const& id);
+    void removeCustomItem(std::string const& id);
+    int customItemCount(std::string const& id) const;
+    void setCustomItemCount(std::string const& id, int count);
+    void writeCustomItems(std::map<std::string, int> const& items);
+    std::vector<std::string> customItemList() const;
+
+    static std::vector<std::string> const& limitSettingNames();
+    float maxValue(std::string const& settingName) const;
+    void bumpMax(std::string const& settingName, int delta);
+    ValueType const* findLimitValue(std::string const& settingName) const;
+
 private:
     ValueType time = FloatValue(1.f);
     ValueType closeAfterLoot = BoolValue(false);
     ValueType enhanced = BoolValue(false);
     ValueType autoOrganize = BoolValue(false);
+
+    ValueType maxBows = FloatValue(2.f);
+    ValueType maxSwords = FloatValue(1.f);
+    ValueType maxHelmets = FloatValue(1.f);
+    ValueType maxChestplates = FloatValue(1.f);
+    ValueType maxLeggings = FloatValue(1.f);
+    ValueType maxBoots = FloatValue(1.f);
+    ValueType maxGapples = FloatValue(5.f);
+    ValueType maxBlocks = FloatValue(5.f);
+    ValueType maxArrows = FloatValue(5.f);
+    ValueType maxFood = FloatValue(5.f);
+    ValueType maxEggs = FloatValue(2.f);
+    ValueType maxLavaBuckets = FloatValue(1.f);
+    ValueType customItems = TextValue(L"");
+    ValueType customOpenPicker = ButtonValue();
 
     SDK::ContainerScreenController* controller = nullptr;
     std::chrono::steady_clock::time_point lastSeen {};

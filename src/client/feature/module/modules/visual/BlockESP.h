@@ -4,6 +4,7 @@
 #include "client/event/events/RenderLayerEvent.h"
 #include "util/DxUtil.h"
 #include "util/LMath.h"
+#include <chrono>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -52,7 +53,10 @@ public:
     void rebuildCatalog();
     [[nodiscard]] IconDraw findIconSource(std::string const& id);
 
-    void setIconDraws(std::vector<IconDraw>&& draws) { iconDraws = std::move(draws); }
+    void setIconDraws(std::vector<IconDraw>&& draws) {
+        iconDraws = std::move(draws);
+        iconDrawsStamp = std::chrono::steady_clock::now();
+    }
     void clearIconDraws() { iconDraws.clear(); }
 
     void persist();
@@ -72,6 +76,7 @@ private:
     std::vector<std::shared_ptr<BlockEntry>> entries;
     std::vector<CatalogEntry> catalog;
     std::vector<IconDraw> iconDraws;
+    std::chrono::steady_clock::time_point iconDrawsStamp {};
 
     struct FoundBlock {
         BlockPos pos;

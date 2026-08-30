@@ -29,6 +29,7 @@
 #include "event/events/RendererCleanupEvent.h"
 #include "misc/ModuleProfiler.h"
 #include "event/events/FocusLostEvent.h"
+#include "render/asset/ItemIconCache.h"
 #include "event/events/AppSuspendedEvent.h"
 #include "event/events/UpdateEvent.h"
 #include "event/events/CharEvent.h"
@@ -462,8 +463,13 @@ DWORD __stdcall startThreadImpl(HINSTANCE dll) {
         MVSIG(ContainerManagerModel_getSlot),
         MVSIG(CompoundTag_get),
         MVSIG(ContainerScreenController_handleAutoPlace),
-        MVSIG(ContainerScreenController_handleTakePlace),
+        MVSIG(ContainerScreenController_handleDropItem),
         MVSIG(ContainerManagerModel_autoPlace),
+        MVSIG(ResourcePack_getResource),
+        MVSIG(ExtendedCertificate_createClientData),
+        MVSIG(AppPlatform_loginInstance),
+        MVSIG(ItemUseSlowdown_apply),
+        MVSIG(BlockMovementSlowdown_apply),
         MVSIG(ItemStackNetManagerClient_addRequestAction),
         MVSIG(ItemStackNetManagerClient_beginRequest),
         MVSIG(ItemStackNetManagerClient_endRequest),
@@ -487,6 +493,8 @@ DWORD __stdcall startThreadImpl(HINSTANCE dll) {
         MVSIG(ClientInstanceScreenModel_forwardSoundSubtitle),
         MVSIG(BaseActorRenderer_renderText),
         MVSIG(AppPlatformGDK_releaseMouse),
+        MVSIG(SneakMovement_gateA),
+        MVSIG(SneakMovement_gateB),
         MVSIG(Misc::Platform_GameCore),
         MVSIG(Misc::mouseDevice),
     };
@@ -714,6 +722,9 @@ bool Necromancer::prepareForUnload(HMODULE module) noexcept {
 
         ModuleProfiler::get().shutdown();
         Logger::Info("Eject: profiler stopped");
+
+        ItemIconCache::get().shutdown();
+        Logger::Info("Eject: icon worker stopped");
 
         PlayerListManager::get().shutdown();
         Logger::Info("Eject: player-list writer stopped");
@@ -1296,6 +1307,7 @@ void Necromancer::onPacketReceive(Event&) {
 
 void Necromancer::onTick(Event& ev) {
     updateModuleBlocking();
+    ItemIconCache::get().tick();
 }
 
 void Necromancer::onMouseRelease(Event& ev) {

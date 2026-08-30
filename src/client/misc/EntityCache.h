@@ -55,7 +55,7 @@ public:
 
 private:
     EntityCache();
-    void rebuild();
+    void rebuild(bool feedTracker);
     std::shared_ptr<Snapshot> acquireBuffer();
 
     static constexpr size_t bufferCount = 4;

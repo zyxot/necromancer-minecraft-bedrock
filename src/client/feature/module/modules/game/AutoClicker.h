@@ -31,7 +31,10 @@ private:
     std::chrono::steady_clock::time_point nextRightClick = std::chrono::steady_clock::now();
     std::mt19937 rng;
     bool leftBlockHeldByUs = false;
+    class Aimbot* aimbotModule = nullptr;
+    bool aimbotResolved = false;
 
+    Aimbot* resolveAimbot();
     void pushAction(int button, bool down);
     void handleButton(int button, bool btnEnabled, float cpsFixed, float cpsMin, float cpsMax,
                       std::chrono::steady_clock::time_point& nextClick, std::chrono::steady_clock::time_point now);

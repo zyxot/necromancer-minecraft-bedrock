@@ -9,10 +9,14 @@ public:
         persistent = true;
     }
 
+    void setViewPosition(Vec3 const& position) { newPosition = position; }
+
     std::optional<Vec2> getNewRot() { return newViewAngles; }
+    std::optional<Vec3> getNewPosition() { return newPosition; }
     bool isPersistent() const { return persistent; }
 
 private:
     std::optional<Vec2> newViewAngles;
+    std::optional<Vec3> newPosition;
     bool persistent = false;
 };

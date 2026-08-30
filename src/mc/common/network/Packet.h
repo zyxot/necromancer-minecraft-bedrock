@@ -3,6 +3,7 @@ namespace SDK {
     enum class PacketID : uint8_t {
         NONE = 0,
         LOGIN = 0x1,
+        DISCONNECT = 0x5,
         TEXT = 0x9,
         ADD_PLAYER = 0xC,
         MOVE_ACTOR_ABSOLUTE = 0x12,
@@ -21,6 +22,7 @@ namespace SDK {
         SET_SCORE = 0x6c,
         MOVE_ACTOR_DELTA = 0x6F,
         NETWORK_STACK_LATENCY = 0x73,
+        CORRECT_PLAYER_MOVE_PREDICTION = 0xA1,
         PLAYER_AUTH_INPUT = 0x90,
         TOAST_REQUEST = 0xBA,
         COUNT,

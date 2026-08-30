@@ -116,23 +116,64 @@ namespace {
         }
     }
 
-    int sehCallTakePlace(void* mgr, int idx, const void* dst, int count, const void* src, unsigned long& exCode,
-                         uintptr_t& exAddr) {
+    bool sehCallClickSlot(void* controller, int idx, const std::string& collection, int slot, unsigned long& exCode,
+                          uintptr_t& exAddr) {
         __try {
-            using Fn = int(__fastcall*)(void*, const void*, int, const void*);
-            auto vtable = *reinterpret_cast<Fn**>(mgr);
+            using Fn = void(__fastcall*)(void*, const std::string&, int);
+            auto vtable = *reinterpret_cast<Fn**>(controller);
             exAddr = reinterpret_cast<uintptr_t>(vtable[idx]);
-            return vtable[idx](mgr, dst, count, src);
-        } __except (exCode = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
-            return -1;
+            vtable[idx](controller, collection, slot);
+            return true;
+        } __except (exCode = GetExceptionCode(),
+                    exAddr = reinterpret_cast<uintptr_t>((GetExceptionInformation())->ExceptionRecord->ExceptionAddress),
+                    EXCEPTION_EXECUTE_HANDLER) {
+            return false;
         }
     }
 }
 
-void SDK::ContainerScreenController::_handleTakePlace(const std::string& viewName, int slot, bool b) {
-    int idx = resolveVtableIndex(this, Signatures::ContainerScreenController_handleTakePlace.result,
-                                 Signatures::VtableIndex::ContainerScreenController::handleTakePlace, "takePlace");
-    memory::callVirtual<int>(this, idx, viewName, slot, b);
+void SDK::ContainerScreenController::clickSlot(const std::string& collection, int slot) {
+    unsigned long exCode = 0;
+    uintptr_t exAddr = 0;
+    if (!sehCallClickSlot(this, Signatures::VtableIndex::ContainerScreenController::clickSlot, collection, slot,
+                          exCode, exAddr)) {
+        Logger::Warn("[ChestStealer] clickSlot faulted on {}[{}] (exCode={:X} exAddr={:X})", collection, slot, exCode,
+                     exAddr);
+    }
+}
+
+void SDK::ContainerScreenController::dropSlot(const std::string& collection, int slot) {
+    auto cursorHolds = [&]() {
+        auto cursor = getItemStack("cursor_items", 0);
+        return cursor && cursor->valid && cursor->itemCount > 0;
+    };
+
+    if (cursorHolds()) {
+        Logger::Warn("[ChestStealer] dropSlot aborted on {}[{}], cursor already holds an item", collection, slot);
+        return;
+    }
+
+    clickSlot(collection, slot);
+
+    if (!cursorHolds()) {
+        Logger::Warn("[ChestStealer] dropSlot pickup failed on {}[{}], item stayed in place", collection, slot);
+        return;
+    }
+
+    int idx = resolveVtableIndex(this, Signatures::ContainerScreenController_handleDropItem.result,
+                                 Signatures::VtableIndex::ContainerScreenController::handleDropItem, "dropSlot");
+    unsigned long exCode = 0;
+    uintptr_t exAddr = 0;
+    if (!sehCallClickSlot(this, idx, collection, slot, exCode, exAddr)) {
+        Logger::Warn("[ChestStealer] dropSlot faulted on {}[{}] (exCode={:X} exAddr={:X})", collection, slot, exCode,
+                     exAddr);
+    }
+
+    if (cursorHolds()) {
+        clickSlot(collection, slot);
+        Logger::Warn("[ChestStealer] dropSlot drop did not take on {}[{}], item returned to the slot", collection,
+                     slot);
+    }
 }
 
 void* SDK::ContainerScreenController::_getSelectedSlotInfo() {
@@ -208,20 +249,44 @@ int SDK::ContainerScreenController::transferSlot(const std::string& srcColl, int
     uintptr_t buckets = 0;
     if (!sehReadQword(reinterpret_cast<char*>(mgr) + 0x40, buckets) || !buckets) return 0;
 
-    SlotInfo from { srcColl, srcSlot };
-    SlotInfo to { dstColl, dstSlot };
+    if (auto cursor = getItemStack("cursor_items", 0); cursor && cursor->valid && cursor->itemCount > 0) return 0;
+
+    auto srcBefore = getItemStack(srcColl, srcSlot);
+    if (!srcBefore) return 0;
+    int srcCount = srcBefore->itemCount;
+    auto dstBefore = getItemStack(dstColl, dstSlot);
+    int dstCount = dstBefore ? dstBefore->itemCount : 0;
 
     unsigned long exCode = 0;
     uintptr_t exAddr = 0;
-    int moved = sehCallTakePlace(mgr, Signatures::VtableIndex::ContainerManagerModel::takePlace, &to, 0x7FFFFFFF,
-                                 &from, exCode, exAddr);
-
-    if (moved < 0) {
-        Logger::Warn("[ChestStealer] transferSlot faulted for {}[{}] -> {}[{}] (exCode={:X} exAddr={:X})", srcColl,
-                     srcSlot, dstColl, dstSlot, exCode, exAddr);
+    if (!sehCallClickSlot(this, Signatures::VtableIndex::ContainerScreenController::clickSlot, srcColl, srcSlot,
+                          exCode, exAddr)) {
+        Logger::Warn("[ChestStealer] transferSlot pickup faulted on {}[{}] (exCode={:X} exAddr={:X})", srcColl,
+                     srcSlot, exCode, exAddr);
         return 0;
     }
-    if (moved == 0) {
+    if (!sehCallClickSlot(this, Signatures::VtableIndex::ContainerScreenController::clickSlot, dstColl, dstSlot,
+                          exCode, exAddr)) {
+        Logger::Warn("[ChestStealer] transferSlot place faulted on {}[{}] (exCode={:X} exAddr={:X})", dstColl, dstSlot,
+                     exCode, exAddr);
+        sehCallClickSlot(this, Signatures::VtableIndex::ContainerScreenController::clickSlot, srcColl, srcSlot,
+                         exCode, exAddr);
+        return 0;
+    }
+
+    auto srcAfter = getItemStack(srcColl, srcSlot);
+    auto dstAfter = getItemStack(dstColl, dstSlot);
+    int srcLeft = srcAfter ? srcAfter->itemCount : 0;
+    int dstNow = dstAfter ? dstAfter->itemCount : 0;
+    int moved = srcCount - srcLeft;
+
+    if (dstNow + srcLeft < dstCount + srcCount) {
+        sehCallClickSlot(this, Signatures::VtableIndex::ContainerScreenController::clickSlot, srcColl, srcSlot,
+                         exCode, exAddr);
+        Logger::Info("[ChestStealer] transferSlot merge leftover returned to {}[{}]", srcColl, srcSlot);
+    }
+
+    if (moved <= 0) {
         Logger::Warn("[ChestStealer] transferSlot moved nothing for {}[{}] -> {}[{}]", srcColl, srcSlot, dstColl,
                      dstSlot);
     } else {

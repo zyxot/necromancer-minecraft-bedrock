@@ -12,6 +12,7 @@
 #include "commands/ToggleCommand.h"
 #include "commands/SetPrefixCommand.h"
 #include "commands/ConfigCommand.h"
+#include "commands/SkinsCommand.h"
 //
 
 CommandManager::CommandManager() {
@@ -23,6 +24,7 @@ CommandManager::CommandManager() {
     this->items.push_back(std::make_shared<ToggleCommand>());
     this->items.push_back(std::make_shared<SetPrefixCommand>());
     this->items.push_back(std::make_shared<ConfigCommand>());
+    this->items.push_back(std::make_shared<SkinsCommand>());
 }
 
 void CommandManager::refreshLocalization() {

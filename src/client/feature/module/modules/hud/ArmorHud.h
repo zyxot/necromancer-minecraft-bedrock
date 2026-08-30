@@ -1,6 +1,8 @@
 #pragma once
 #include "../../HUDModule.h"
 
+class RenderLayerEvent;
+
 namespace SDK {
     class ItemStack;
     class Player;
@@ -11,6 +13,7 @@ public:
     ArmorHud();
 
     void render(DrawUtil& ctx, bool isDefault, bool inEditor) override;
+    void onRenderLayer(Event& event);
 
 private:
     EnumData mode;
@@ -39,9 +42,21 @@ private:
         wchar_t label = L'?';
     };
 
+    struct Metrics {
+        float size = 32.f;
+        float gap = 0.f;
+        float rowH = 0.f;
+        float cellH = 0.f;
+        float cellW = 0.f;
+        float stepX = 0.f;
+        bool vertical = true;
+    };
+
     int collectPieces(SDK::Player* player, Piece out[slot_count]);
-    void drawPiece(DrawUtil& dc, Piece const& piece, Vec2 pos, float size, float cellW);
-    void drawIcon(DrawUtil& dc, Piece const& piece, Vec2 pos, float size);
+    Metrics layoutMetrics();
+    void drawPiece(DrawUtil& dc, Piece const& piece, Vec2 pos, float size, float cellW, bool iconsHere);
+    void drawIcon(DrawUtil& dc, Piece const& piece, Vec2 pos, float size, bool iconsHere);
     void drawOutlinedText(DrawUtil& dc, d2d::Rect const& rc, std::wstring const& text, d2d::Color const& col,
                           float fontSize, DWRITE_TEXT_ALIGNMENT align);
+
 };

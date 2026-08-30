@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Triggerbot.h"
 #include "AfterTrack.h"
+#include "Aimbot.h"
 #include "Backtrack.h"
 #include "client/misc/EntityCache.h"
 #include "client/misc/MaceUtil.h"
@@ -182,6 +183,16 @@ Triggerbot::Triggerbot()
 
     addSetting("backtrackTarget", LocalizeString::get("client.module.triggerbot.backtrackTarget.name"),
                LocalizeString::get("client.module.triggerbot.backtrackTarget.desc"), backtrackTarget, "players"_istrue);
+    addSetting("lagRecordsOnly", LocalizeString::get("client.module.triggerbot.lagRecordsOnly.name"),
+               LocalizeString::get("client.module.triggerbot.lagRecordsOnly.desc"), lagRecordsOnly,
+               Setting::Condition(std::vector<Setting::SingleCond> {
+                   { "players", { 1 }, false },
+                   { "backtrackTarget", { 1 }, false },
+               }));
+    addSetting("ignoreInvulnerable", LocalizeString::get("client.module.triggerbot.ignoreInvulnerable.name"),
+               LocalizeString::get("client.module.triggerbot.ignoreInvulnerable.desc"), ignoreInvulnerable);
+    addSetting("leftClickSwing", LocalizeString::get("client.module.triggerbot.leftClickSwing.name"),
+               LocalizeString::get("client.module.triggerbot.leftClickSwing.desc"), leftClickSwing);
 
     this->listen<UpdateEvent>(&Triggerbot::onUpdate);
     this->listen<AfterMoveEvent>(&Triggerbot::onAfterMove);
@@ -218,6 +229,15 @@ AfterTrack* Triggerbot::resolveAfterTrack() {
     return afterTrackModule;
 }
 
+Aimbot* Triggerbot::resolveAimbot() {
+    if (!aimbotResolved) {
+        auto mod = Necromancer::getModuleManager().find("Aimbot");
+        aimbotModule = mod ? static_cast<Aimbot*>(mod.get()) : nullptr;
+        aimbotResolved = true;
+    }
+    return aimbotModule;
+}
+
 Triggerbot::TargetSelection Triggerbot::pickTarget(float maxRange) {
     auto ci = SDK::ClientInstance::get();
     if (!ci || !ci->minecraft) return {};
@@ -225,6 +245,30 @@ Triggerbot::TargetSelection Triggerbot::pickTarget(float maxRange) {
     auto level = ci->minecraft->getLevel();
     auto lp = ci->getLocalPlayer();
     if (!level || !lp) return {};
+
+    if (auto* ab = resolveAimbot(); ab && ab->isPSilent()) {
+        uint64_t lockId = 0;
+        AABB lockBox {};
+        Vec3 lockPoint {};
+        if (!ab->getPSilentLock(lockId, lockBox, lockPoint)) return {};
+
+        auto* actor = EntityCache::get().findByRuntimeID(lockId);
+        if (!actor) return {};
+
+        AABB selfBox = lp->aabbShape ? lp->aabbShape->boundingBox : AABB {};
+        Vec3 eye { (selfBox.lower.x + selfBox.higher.x) * 0.5f, selfBox.higher.y - 0.18f,
+                   (selfBox.lower.z + selfBox.higher.z) * 0.5f };
+        if (eye.distance(lockPoint) > maxRange) return {};
+
+        TargetSelection sel;
+        sel.actor = actor;
+        sel.record = TargetRecord::Live;
+        sel.box = lockBox;
+        sel.hitPoint = lockPoint;
+        sel.recordAgeMs = -1.f;
+        sel.obstructed = true;
+        return sel;
+    }
 
     auto hit = level->getHitResult();
     if (!hit) return {};
@@ -251,6 +295,9 @@ Triggerbot::TargetSelection Triggerbot::pickTarget(float maxRange) {
     bool doLagRecords = std::get<BoolValue>(backtrackTarget);
     Backtrack* bt = doLagRecords ? resolveBacktrack() : nullptr;
     AfterTrack* at = doLagRecords ? resolveAfterTrack() : nullptr;
+    // Lag records only: mobs never have records, so requiring one excludes them.
+    bool recordsOnly = doLagRecords && std::get<BoolValue>(lagRecordsOnly).value;
+    bool skipInvulnerable = std::get<BoolValue>(ignoreInvulnerable).value;
 
     TargetSelection best;
     auto consider = [&](SDK::Actor* actor, AABB const& box, TargetRecord record, float recordAgeMs, float pad) {
@@ -277,20 +324,27 @@ Triggerbot::TargetSelection Triggerbot::pickTarget(float maxRange) {
         if (doIgnoreFriends && isPlayer &&
             PlayerListManager::get().isFriend(reinterpret_cast<SDK::Player*>(entt)->playerName))
             continue;
+        // Inside the 10-tick (0.5s) damage-immunity window a hit is discarded by the
+        // server, so firing at them just burns clicks.
+        if (skipInvulnerable && entt->invulnerableTime > 5) continue;
+        if (recordsOnly && !isPlayer) continue;
 
         AABB liveBox = entt->getBoundingBox();
         auto liveDist = liveBox.intersectsRay(hit->start, direction, nearest, 0.08f);
-        if (liveDist && *liveDist < nearest) {
+        if (liveDist && *liveDist < nearest && !recordsOnly) {
             consider(entt, liveBox, TargetRecord::Live, -1.f, 0.08f);
         }
 
         if (!isPlayer || !doLagRecords) continue;
 
-        float actorNearest = liveDist ? *liveDist : nearest;
-        TargetRecord actorRecord = liveDist ? TargetRecord::Live : TargetRecord::Backtrack;
+        // With recordsOnly the live box must not seed the distance baseline either,
+        // otherwise a record sitting behind the live model gets rejected for being
+        // "further away" and the actor ends up with no eligible target at all.
+        float actorNearest = (liveDist && !recordsOnly) ? *liveDist : nearest;
+        TargetRecord actorRecord = (liveDist && !recordsOnly) ? TargetRecord::Live : TargetRecord::Backtrack;
         AABB actorBox = liveBox;
         float actorRecordAge = -1.f;
-        bool actorHit = liveDist.has_value();
+        bool actorHit = liveDist.has_value() && !recordsOnly;
 
         auto considerRecord = [&](AABB const& box, TargetRecord record, float recordAgeMs) {
             auto recordDist = box.intersectsRay(hit->start, direction, actorNearest, 0.f);
@@ -357,6 +411,24 @@ void Triggerbot::onAfterMove(Event&) {
 
     if (!Signatures::GameMode_attack.result) return;
     if (auto* bt = resolveBacktrack()) bt->allowDirectAttack(attack.runtimeID);
+    if (std::get<BoolValue>(leftClickSwing)) {
+        if (auto mouse = SDK::MouseDevice::get()) {
+            auto pushClick = [mouse](bool down) {
+                SDK::MouseAction action {};
+                action.x = mouse->x;
+                action.y = mouse->y;
+                action.dx = 0;
+                action.dy = 0;
+                action.action = int8_t { 1 };
+                action.data = down ? int8_t { 1 } : int8_t { 0 };
+                action.pointerId = 0;
+                action.forceMotionlessPointer = false;
+                mouse->inputs.push_back(action);
+            };
+            pushClick(true);
+            pushClick(false);
+        }
+    }
     using GameModeAttackFn = __int64 (*)(void*, SDK::Actor*, char, Vec3*);
     Vec3 clickPos = attack.hitPoint;
     reinterpret_cast<GameModeAttackFn>(Signatures::GameMode_attack.result)(lp->gameMode, target, 0, &clickPos);

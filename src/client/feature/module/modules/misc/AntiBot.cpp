@@ -56,9 +56,6 @@ AntiBot::AntiBot()
     addSliderSetting("playerListGrace", LocalizeString::get("client.module.antiBot.playerListGrace.name"),
                      LocalizeString::get("client.module.antiBot.playerListGrace.desc"), playerListGrace,
                      FloatValue(0.f), FloatValue(10.f), FloatValue(0.25f), playerListOptions);
-    addSliderSetting("minimumActorAge", LocalizeString::get("client.module.antiBot.minimumActorAge.name"),
-                     LocalizeString::get("client.module.antiBot.minimumActorAge.desc"), minimumActorAge,
-                     FloatValue(0.f), FloatValue(10.f), FloatValue(0.25f), playerListOptions);
 
     Setting::Condition hitboxOptions(std::vector<Setting::SingleCond> {
         { "mode", { static_cast<int>(Mode::Custom) }, false },
@@ -163,6 +160,7 @@ void AntiBot::rebuildCache() {
 
     ++tickCounter;
     auto next = std::make_shared<Cache>();
+    next->currentTick = tickCounter;
     next->localActor = ci->getLocalPlayer();
     next->localRuntimeId = next->localActor ? next->localActor->getRuntimeID() : 0;
 
@@ -193,21 +191,18 @@ void AntiBot::rebuildCache() {
         auto [stateIt, inserted] = actorStates.try_emplace(runtimeId);
         auto& state = stateIt->second;
         if (inserted || state.name != foldedName) {
-            state.absentSinceTick = 0;
+            state.lastVerifiedTick = 0;
             state.name = foldedName;
         }
         state.lastSeenTick = tickCounter;
 
         bool listed = next->playerNames.contains(player->playerName) || next->foldedPlayerNames.contains(foldedName);
         if (listed || !next->playerListAvailable) {
-            state.absentSinceTick = 0;
-        } else if (state.absentSinceTick == 0) {
-            state.absentSinceTick = tickCounter;
+            state.lastVerifiedTick = tickCounter;
+            next->playerListVerified.insert(runtimeId);
         }
+        next->lastVerifiedTick.emplace(runtimeId, state.lastVerifiedTick);
 
-        if (state.absentSinceTick != 0) {
-            next->absentTicks.emplace(runtimeId, tickCounter - state.absentSinceTick + 1);
-        }
         if (actor != next->localActor && runtimeId != next->localRuntimeId && !foldedName.empty()) {
             ++nameCounts[foldedName];
         }
@@ -254,16 +249,13 @@ bool AntiBot::isBot(SDK::Actor* entt) {
     if (doDuplicates && !foldedName.empty() && current->duplicateNames.contains(foldedName)) return true;
 
     if (doPlayerList && current->playerListAvailable) {
-        bool listed = current->playerNames.contains(name) || current->foldedPlayerNames.contains(foldedName);
-        if (!listed) {
+        if (!current->playerListVerified.contains(runtimeId)) {
             float graceSeconds = balanced ? 1.f : std::get<FloatValue>(mod->playerListGrace).value;
-            float ageSeconds = balanced ? 2.f : std::get<FloatValue>(mod->minimumActorAge).value;
             uint64_t graceTicks = static_cast<uint64_t>(std::ceil(std::max(0.f, graceSeconds) * ticksPerSecond));
-            uint64_t minimumTicks = static_cast<uint64_t>(std::ceil(std::max(0.f, ageSeconds) * ticksPerSecond));
-            uint64_t absentTicks = 0;
-            if (auto it = current->absentTicks.find(runtimeId); it != current->absentTicks.end()) absentTicks = it->second;
-            uint64_t actorTicks = entt->ticksExisted > 0 ? static_cast<uint64_t>(entt->ticksExisted) : 0;
-            if (absentTicks > graceTicks && actorTicks >= minimumTicks) return true;
+            uint64_t lastVerified = 0;
+            if (auto it = current->lastVerifiedTick.find(runtimeId); it != current->lastVerifiedTick.end())
+                lastVerified = it->second;
+            if (lastVerified == 0 || current->currentTick - lastVerified > graceTicks) return true;
         }
     }
 

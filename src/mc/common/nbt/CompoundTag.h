@@ -30,6 +30,11 @@ namespace SDK {
         short val;
     };
 
+    class IntTag : public Tag {
+    public:
+        int val;
+    };
+
     class ListTag : public Tag {
     public:
         std::vector<Tag*> val;

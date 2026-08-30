@@ -31,6 +31,7 @@ public:
 
     void openBlockPicker(class BlockESP* mod);
     void openItemSwitcher(class ItemSwitcher* mod);
+    void openChestStealerItems(class ChestStealer* mod);
 
     void jumpToModule(std::string const& name) {
         jumpModule = name;
@@ -70,6 +71,10 @@ private:
     void closeBlockPicker();
     void drawItemSwitcher(class D2DUtil& dc);
     void closeItemSwitcher();
+    void drawChestStealerItems(class D2DUtil& dc);
+    void closeChestStealerItems();
+    void commitChestItemCount();
+    void commitChestLimitEdit();
     void recordPickerEdit(class Setting* set, size_t valueType, nlohmann::json value);
     void recordBlockListEdit(class BlockESP* mod);
     void refreshConfigList();
@@ -135,6 +140,25 @@ private:
     TextBox itemSwitcherSearchBox { {}, 48 };
     bool itemSwitcherSearchRegistered = false;
     d2d::Rect iPickerRect = {};
+
+    struct ChestStealerItemsPicker {
+        class ChestStealer* mod = nullptr;
+        float scroll = 0.f;
+        float lerpScroll = 0.f;
+        float scrollMax = 0.f;
+        bool queueClose = false;
+        bool justOpened = false;
+        bool addMode = false;
+        bool dragging = false;
+        Vec2 dragOffs = {};
+        std::string editingId;
+        std::string editingLimit;
+    } chestItemsPicker {};
+    TextBox chestItemsSearchBox { {}, 48 };
+    TextBox chestItemsCountBox { {}, 5, true };
+    bool chestItemsSearchRegistered = false;
+    bool chestItemsCountRegistered = false;
+    d2d::Rect chestPickerRect = {};
 
     TextBox searchTextBox {};
     TextBox configNameTextBox { {}, 64 };

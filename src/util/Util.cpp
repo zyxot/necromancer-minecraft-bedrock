@@ -723,30 +723,3 @@ std::string util::GetProcessorInfo() {
     return model;
 }
 
-bool util::TryGetGameTextureBuffer(std::string const& texturePath, std::string& buffer) {
-    buffer.clear();
-
-    auto clientInstance = SDK::ClientInstance::get();
-    if (!clientInstance) {
-        return false;
-    }
-
-    for (auto fileSystem : { SDK::ResourceFileSystem::UserPackage, SDK::ResourceFileSystem::AppPackage }) {
-        SDK::ResourceLocation location(fileSystem);
-        location.mPath->value = texturePath;
-        buffer.clear();
-
-        if (clientInstance->getResourcePackManager().load(location, buffer)) {
-            return true;
-        }
-    }
-
-    buffer.clear();
-    return false;
-}
-
-std::string util::GetGameTextureBuffer(std::string const& texturePath) {
-    std::string buffer;
-    TryGetGameTextureBuffer(texturePath, buffer);
-    return buffer;
-}

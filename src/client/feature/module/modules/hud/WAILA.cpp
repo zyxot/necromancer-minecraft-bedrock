@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "WAILA.h"
+#include "mc/Addresses.h"
 
 #include "mc/common/entity/component/ActorTypeComponent.h"
 #include "mc/common/locale/I18n.h"
@@ -83,11 +84,11 @@ std::vector<std::string> WAILA::findPreferredToolItemIds(SDK::Block const& block
 
     void* registry = nullptr;
     if (level) {
-        registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
+        registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + Signatures::FieldOffset::Level::itemRegistry);
     }
     if (!registry) return {};
 
-    auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
+    auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + Signatures::FieldOffset::ItemRegistry::itemCounters);
     if (!itemCounters[0] || !itemCounters[1]) return {};
 
     alignas(SDK::ItemStack) char storage[sizeof(SDK::ItemStack)] = {};
@@ -445,12 +446,12 @@ void WAILA::render(DrawUtil& dc, bool isDefault, bool inEditor) {
 
         void* registry = nullptr;
         if (level) {
-            registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
+            registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + Signatures::FieldOffset::Level::itemRegistry);
         }
         std::vector<void*> toolCounters(target->toolItemIds.size());
         bool hasToolCounter = false;
         if (registry) {
-            auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
+            auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + Signatures::FieldOffset::ItemRegistry::itemCounters);
             for (auto current = itemCounters[0]; current && current < itemCounters[1]; ++current) {
                 auto counter = *current;
                 auto item = counter ? *reinterpret_cast<SDK::Item**>(counter) : nullptr;

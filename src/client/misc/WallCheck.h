@@ -1,5 +1,6 @@
 #pragma once
 #include "BlockSolid.h"
+#include "mc/Addresses.h"
 #include "mc/common/world/level/block/Block.h"
 #include "mc/common/world/level/block/BlockLegacy.h"
 #include "mc/common/world/level/BlockSource.h"
@@ -15,7 +16,7 @@
 
 namespace WallCheck {
     namespace detail {
-        constexpr size_t fetchAABBsVtIndex = 0x10;
+        constexpr size_t fetchAABBsVtIndex = Signatures::VtableIndex::BlockSourceExtra::fetchAABBs;
 
         inline std::atomic<int>& shapeMode() {
             static std::atomic<int> mode { 0 };

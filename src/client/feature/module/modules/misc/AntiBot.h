@@ -32,16 +32,18 @@ private:
     struct Cache {
         SDK::Actor* localActor = nullptr;
         uint64_t localRuntimeId = 0;
+        uint64_t currentTick = 0;
         bool playerListAvailable = false;
         std::unordered_set<std::string> playerNames;
         std::unordered_set<std::string> foldedPlayerNames;
         std::unordered_set<std::string> duplicateNames;
-        std::unordered_map<uint64_t, uint64_t> absentTicks;
+        std::unordered_set<uint64_t> playerListVerified;
+        std::unordered_map<uint64_t, uint64_t> lastVerifiedTick;
     };
 
     struct ActorState {
         uint64_t lastSeenTick = 0;
-        uint64_t absentSinceTick = 0;
+        uint64_t lastVerifiedTick = 0;
         std::string name;
     };
 
@@ -61,7 +63,6 @@ private:
     ValueType invisibleCheck = BoolValue(false);
     ValueType armorCheck = BoolValue(false);
     ValueType playerListGrace = FloatValue(1.f);
-    ValueType minimumActorAge = FloatValue(2.f);
     ValueType hitboxWidthMin = FloatValue(0.25f);
     ValueType hitboxWidthMax = FloatValue(1.2f);
     ValueType hitboxHeightMin = FloatValue(0.25f);

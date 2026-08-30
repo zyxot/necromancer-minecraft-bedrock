@@ -3,7 +3,7 @@
 
 #include "client/Necromancer.h"
 #include "client/event/events/TickEvent.h"
-#include "client/feature/module/modules/misc/LegitScaffold.h"
+#include "client/feature/module/modules/misc/Scaffolding.h"
 #include "client/screen/ScreenManager.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/player/LocalPlayer.h"
@@ -59,10 +59,10 @@ AutoBlock::AutoBlock()
 int AutoBlock::scaffoldHeadroom() {
     if (!std::get<BoolValue>(scaffoldAware).value) return 0;
 
-    auto mod = Necromancer::getModuleManager().find("LegitScaffold");
+    auto mod = Necromancer::getModuleManager().find("Scaffolding");
     if (!mod || !mod->isEnabled()) return 0;
 
-    return static_cast<LegitScaffold*>(mod.get())->blocksPerPlacement();
+    return static_cast<Scaffolding*>(mod.get())->blocksPerPlacement();
 }
 
 void AutoBlock::onTick(Event&) {

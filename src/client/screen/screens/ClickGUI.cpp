@@ -14,7 +14,9 @@
 #include "client/feature/module/ModuleManager.h"
 #include "client/feature/module/modules/visual/BlockESP.h"
 #include "client/feature/module/modules/misc/ItemSwitcher.h"
+#include "client/feature/module/modules/misc/ChestStealer.h"
 #include "client/misc/ItemCatalog.h"
+#include "client/render/asset/ItemIconCache.h"
 #include "util/DrawContext.h"
 #include "../../render/asset/Assets.h"
 #include "client/config/ConfigManager.h"
@@ -111,23 +113,26 @@ bool ClickGUI::isModuleInTab(Module& mod) const {
     switch (modTab) {
     case COMBAT:
         return name == "AutoClicker" || name == "Aimbot" || name == "Triggerbot" || name == "ShieldBreaker" ||
-               name == "Backtrack" || name == "AfterTrack" || name == "Reach";
+               name == "Backtrack" || name == "AfterTrack" || name == "Reach" || name == "Criticals";
     case VISUALS:
         return name == "ArmorHud" || name == "BowIndicator" || name == "BlockOutline" || name == "BlockESP" || name == "CPS" || name == "ComboCounter" ||
                name == "BreakProgress" || name == "DamageIndicator" || name == "EnvironmentChanger" ||
                name == "ESP" || name == "FPS" || name == "Font" ||
-               name == "Freelook" || name == "Hitboxes" || name == "ItemCounter" || name == "Fullbright" ||
+               name == "Freelook" || name == "Freecam" || name == "Hitboxes" || name == "ItemCounter" || name == "Fullbright" ||
                name == "Keystrokes" || name == "KeybindList" || name == "MovableCoordinates" || name == "Nickname" ||
                name == "PingDisplay" || name == "ServerDisplay" || name == "PlayerList" || name == "SpeedDisplay" ||
                name == "ThirdPersonNametag" || name == "WAILA" || name == "Zoom" || name == "OutOfViewArrows" ||
-               name == "AntiObs";
+               name == "AntiObs" || name == "MovementPrediction";
     case MOVEMENT:
         return name == "ToggleSprintSneak" || name == "NoFall" || name == "AntiAFK" || name == "Fakelag" ||
-               name == "Velocity" || name == "LegitScaffold" || name == "Timer";
+               name == "Velocity" || name == "Scaffolding" || name == "Timer" || name == "NoSlowDown" ||
+               name == "FastStop" || name == "SafeWalk" || name == "SpearSwap";
     case MISC:
-        return name == "KillNotification" || name == "SkinStealer" || name == "TextHotkey" || name == "AntiBot" ||
+        return name == "KillNotification" || name == "SkinStealer" || name == "TextHotkey" ||
+               name == "AntiBot" ||
                name == "DisableMouseWheel" || name == "ChatSpammer" || name == "AutoBlock" || name == "ChestStealer" ||
-               name == "ItemSwitcher";
+               name == "ItemSwitcher" || name == "Spoofer" || name == "BoxMe" ||
+               name == "BoxEnemy" || name == "WallBuilder" || name == "AutoPlace";
     case CONFIG:
         return false;
     default:
@@ -1305,6 +1310,14 @@ void ClickGUI::onRender(Event&) {
         addLayer(bPickerRect);
     }
 
+    if (itemSwitcherPicker.mod) {
+        addLayer(iPickerRect);
+    }
+
+    if (chestItemsPicker.mod) {
+        addLayer(chestPickerRect);
+    }
+
     if (!kbParentPicker.bind.empty()) {
         addLayer(kbParentPickerRect);
     }
@@ -2041,7 +2054,9 @@ void ClickGUI::onRender(Event&) {
 
                         d2d::Color actionColor = selectAction ? accentColor : d2d::Color::RGB(0xD9, 0xD9, 0xD9, 30);
                         dc.fillRoundedRectangle(toggleRect, actionColor, toggleRect.getHeight() * 0.25f);
-                        dc.drawSingleLineFitted(toggleRect, L"Open", { 1.f, 1.f, 1.f, 1.f },
+                        dc.drawSingleLineFitted(toggleRect,
+                                                LocalizeString::get("client.ui.clickGui.module.open.name").value(),
+                                                { 1.f, 1.f, 1.f, 1.f },
                                                 Renderer::FontSelection::PrimaryRegular, toggleRect.getHeight() * 0.45f,
                                                 DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                     } else {
@@ -2105,7 +2120,12 @@ void ClickGUI::onRender(Event&) {
                 // arrow
                 if (mod.mod) {
                     if (this->shouldSelect(modRect, cursorPos) && !shouldSelect(toggleRect, cursorPos)) {
-                        if (justClicked[0] || justClicked[1]) {
+                        if (!mod.mod->isToggleable() && !mod.mod->showToggle()) {
+                            if (justClicked[0]) {
+                                mod.mod->setEnabled(true);
+                                playClickSound();
+                            }
+                        } else if (justClicked[0] || justClicked[1]) {
                             mod.isExtended = !mod.isExtended;
                             activeSetting = nullptr;
                             clearSettingBoxFocus();
@@ -2219,6 +2239,10 @@ void ClickGUI::onRender(Event&) {
     if (itemSwitcherPicker.mod) {
         drawItemSwitcher(dc);
         if (itemSwitcherPicker.queueClose) closeItemSwitcher();
+    }
+    if (chestItemsPicker.mod) {
+        drawChestStealerItems(dc);
+        if (chestItemsPicker.queueClose) closeChestStealerItems();
     }
 
     if (colorPicker.setting) {
@@ -2431,6 +2455,8 @@ void ClickGUI::onKey(Event& evGeneric) {
             }
         } else if (itemSwitcherPicker.mod) {
             itemSwitcherPicker.queueClose = true;
+        } else if (chestItemsPicker.mod) {
+            chestItemsPicker.queueClose = true;
         } else {
             this->close();
         }
@@ -2483,6 +2509,8 @@ void ClickGUI::onClick(Event& evGeneric) {
             blockPicker.scroll = std::clamp(blockPicker.scroll - delta, 0.f, blockPicker.scrollMax);
         } else if (itemSwitcherPicker.mod && iPickerRect.contains(mouse)) {
             itemSwitcherPicker.scroll = std::clamp(itemSwitcherPicker.scroll - delta, 0.f, itemSwitcherPicker.scrollMax);
+        } else if (chestItemsPicker.mod && chestPickerRect.contains(mouse)) {
+            chestItemsPicker.scroll = std::clamp(chestItemsPicker.scroll - delta, 0.f, chestItemsPicker.scrollMax);
         } else {
             this->scroll = std::clamp(scroll - delta, 0.f, scrollMax);
         }
@@ -2752,7 +2780,9 @@ float ClickGUI::drawSetting(Setting* set, SettingGroup* group, Vec2 const& pos, 
             return enumRect.bottom;
         }
 
-        val.val = std::clamp(val.val, 0, static_cast<int>(entries->size()) - 1);
+        if (!set->multiSelect) {
+            val.val = std::clamp(val.val, 0, static_cast<int>(entries->size()) - 1);
+        }
 
         auto colOff = d2d::Color::RGB(0xD9, 0xD9, 0xD9).asAlpha(0.11f);
         if (!set->rendererInfo.init) {
@@ -2764,7 +2794,26 @@ float ClickGUI::drawSetting(Setting* set, SettingGroup* group, Vec2 const& pos, 
         }
         auto text = set->enumData->getSelectedName();
         int kbEnumSel = val.val;
-        if (kbEdit && kbEdit->value.is_number()) {
+        if (set->multiSelect && val.val >= 0x100) {
+            int mask = val.val & 0xFF;
+            int shown = 0;
+            int shownCount = 0;
+            for (int i = 0; i < static_cast<int>(entries->size()) - 1 && i < 31; i++) {
+                if (mask & (1 << i)) {
+                    shown = i;
+                    shownCount++;
+                }
+            }
+            if (shownCount == 0) {
+                text = LocalizeString::get("client.ui.clickGui.enumMulti.none").value();
+            } else if (shownCount == 1) {
+                text = entries->at(shown).name();
+            } else {
+                text = std::to_wstring(shownCount) + L" " +
+                       LocalizeString::get("client.ui.clickGui.enumMulti.selected").value();
+            }
+            kbEnumSel = val.val;
+        } else if (kbEdit && kbEdit->value.is_number()) {
             kbEnumSel = std::clamp(kbEdit->value.get<int>(), 0, static_cast<int>(entries->size()) - 1);
             text = entries->at(kbEnumSel).name();
         }
@@ -2870,7 +2919,8 @@ float ClickGUI::drawSetting(Setting* set, SettingGroup* group, Vec2 const& pos, 
                                     dropdownRect.right, dropdownRect.top + entryHeight * static_cast<float>(i + 1) };
                 bool entryHovered = dropdownOpen && animatedDropdownRect.contains(cursorPos) &&
                                     this->shouldSelect(entryRect, cursorPos);
-                bool entrySelected = i == kbEnumSel;
+                bool entrySelected = set->multiSelect ? (val.val >= 0x100 && (val.val & 0xFF & (1 << i)))
+                                                      : i == kbEnumSel;
                 if (entryHovered || entrySelected) {
                     dc.fillRoundedRectangle(entryRect,
                                             (entrySelected ? accentColor : d2d::Color::RGB(0xD9, 0xD9, 0xD9))
@@ -2893,13 +2943,25 @@ float ClickGUI::drawSetting(Setting* set, SettingGroup* group, Vec2 const& pos, 
                                 KeybindManager::get().recordEdit(kbEditingBind, group->name(), set->name(),
                                                                  (size_t)Setting::Type::Enum, i);
                             }
+                        } else if (set->multiSelect && i < static_cast<int>(entries->size()) - 1) {
+                            int mask = val.val >= 0x100 ? val.val & 0xFF : 0;
+                            mask ^= (1 << i);
+                            if (mask == 0) {
+                                val.val = 0x100;
+                            } else {
+                                val.val = 0x100 | mask;
+                            }
+                            set->update();
+                            set->userUpdate();
                         } else if (val.val != i) {
                             val.val = i;
                             set->update();
                             set->userUpdate();
                         }
 
-                        dropdownSetting = nullptr;
+                        if (!set->multiSelect) {
+                            dropdownSetting = nullptr;
+                        }
                         clickedEntry = true;
                         playClickSound();
                     }
@@ -3221,6 +3283,8 @@ float ClickGUI::drawSetting(Setting* set, SettingGroup* group, Vec2 const& pos, 
         if (group && group->name() == "BlockESP" && set->name() == "blocks") {
             buttonIcon = Necromancer::getAssets().blockEspIcon.getBitmap();
         } else if (group && group->name() == "ItemSwitcher" && set->name() == "openPicker") {
+            buttonIcon = Necromancer::getAssets().itemSwitchIcon.getBitmap();
+        } else if (group && group->name() == "ChestStealer" && set->name() == "customOpenPicker") {
             buttonIcon = Necromancer::getAssets().itemSwitchIcon.getBitmap();
         }
         dc.ctx->DrawBitmap(buttonIcon, iconRect);
@@ -3628,6 +3692,7 @@ void ClickGUI::recordBlockListEdit(BlockESP* mod) {
 void ClickGUI::openBlockPicker(BlockESP* mod) {
     if (!mod || blockPicker.mod == mod) return;
     if (itemSwitcherPicker.mod) closeItemSwitcher();
+    if (chestItemsPicker.mod) closeChestStealerItems();
     blockPicker = BlockPicker();
     blockPicker.mod = mod;
     if (!blockSearchRegistered) {
@@ -3666,6 +3731,7 @@ void ClickGUI::closeBlockPicker() {
 void ClickGUI::openItemSwitcher(ItemSwitcher* mod) {
     if (!mod) return;
     if (blockPicker.mod) closeBlockPicker();
+    if (chestItemsPicker.mod) closeChestStealerItems();
     itemSwitcherPicker = ItemSwitcherPicker();
     itemSwitcherPicker.mod = mod;
     itemSwitcherPicker.justOpened = true;
@@ -3684,6 +3750,44 @@ void ClickGUI::closeItemSwitcher() {
     itemSwitcherSearchBox.reset();
     itemSwitcherPicker = ItemSwitcherPicker();
     iPickerRect = {};
+}
+
+void ClickGUI::openChestStealerItems(ChestStealer* mod) {
+    if (!mod) return;
+    if (blockPicker.mod) closeBlockPicker();
+    if (itemSwitcherPicker.mod) closeItemSwitcher();
+    chestItemsPicker = ChestStealerItemsPicker();
+    chestItemsPicker.mod = mod;
+    chestItemsPicker.justOpened = true;
+    if (!chestItemsSearchRegistered) {
+        Necromancer::get().addTextBox(&chestItemsSearchBox);
+        chestItemsSearchRegistered = true;
+    }
+    if (!chestItemsCountRegistered) {
+        Necromancer::get().addTextBox(&chestItemsCountBox);
+        chestItemsCountRegistered = true;
+    }
+    chestItemsSearchBox.reset();
+    chestItemsSearchBox.setSelected(false);
+    chestItemsCountBox.reset();
+    chestItemsCountBox.setSelected(false);
+    ItemCatalog::get().entries();
+}
+
+void ClickGUI::closeChestStealerItems() {
+    if (!chestItemsPicker.mod) return;
+    if (!chestItemsPicker.editingId.empty() && chestItemsPicker.mod) {
+        commitChestItemCount();
+    }
+    if (!chestItemsPicker.editingLimit.empty() && chestItemsPicker.mod) {
+        commitChestLimitEdit();
+    }
+    chestItemsSearchBox.setSelected(false);
+    chestItemsSearchBox.reset();
+    chestItemsCountBox.setSelected(false);
+    chestItemsCountBox.reset();
+    chestItemsPicker = ChestStealerItemsPicker();
+    chestPickerRect = {};
 }
 
 void ClickGUI::drawItemSwitcher(D2DUtil& dc) {
@@ -3820,6 +3924,469 @@ void ClickGUI::drawItemSwitcher(D2DUtil& dc) {
         itemSwitcherPicker.justOpened = false;
     } else if (justClicked[0] && !pickerRect.contains(cursorPos)) {
         itemSwitcherPicker.queueClose = true;
+    }
+}
+
+void ClickGUI::commitChestItemCount() {
+    auto mod = chestItemsPicker.mod;
+    if (!mod || chestItemsPicker.editingId.empty()) return;
+
+    auto text = chestItemsCountBox.getText();
+    if (!text.empty()) {
+        try {
+            mod->setCustomItemCount(chestItemsPicker.editingId, std::stoi(text));
+        } catch (std::out_of_range&) {
+        } catch (std::invalid_argument&) {
+        }
+    }
+    chestItemsPicker.editingId.clear();
+    chestItemsCountBox.setSelected(false);
+    chestItemsCountBox.reset();
+
+    if (!kbEditingBind.empty()) {
+        Setting* dataSet = nullptr;
+        mod->settings->forEach([&](std::shared_ptr<Setting> s) {
+            if (!dataSet && s->name() == "customItems") dataSet = s.get();
+        });
+        if (dataSet) {
+            nlohmann::json stored;
+            std::get<TextValue>(*dataSet->value).store(stored);
+            recordPickerEdit(dataSet, (size_t)Setting::Type::Text, std::move(stored));
+        }
+    }
+}
+
+void ClickGUI::commitChestLimitEdit() {
+    auto mod = chestItemsPicker.mod;
+    if (!mod || chestItemsPicker.editingLimit.empty()) return;
+
+    auto text = chestItemsCountBox.getText();
+    if (!text.empty()) {
+        try {
+            mod->bumpMax(chestItemsPicker.editingLimit, std::stoi(text) - static_cast<int>(mod->maxValue(chestItemsPicker.editingLimit)));
+        } catch (std::out_of_range&) {
+        } catch (std::invalid_argument&) {
+        }
+    }
+    chestItemsPicker.editingLimit.clear();
+    chestItemsCountBox.setSelected(false);
+    chestItemsCountBox.reset();
+}
+
+void ClickGUI::drawChestStealerItems(D2DUtil& dc) {
+    auto mod = chestItemsPicker.mod;
+    if (!mod) return;
+
+    auto& cursorPos = SDK::ClientInstance::get()->cursorPos;
+    auto accentColor = d2d::Color(Necromancer::get().getAccentColor().getMainColor());
+    bool pickerRecording = !kbEditingBind.empty();
+
+    float w = rect.getWidth() * 0.3f;
+    float pad = w * 0.04f;
+    float titleH = rect.getHeight() * 0.043f;
+    float rowH = rect.getHeight() * 0.052f;
+    float gap = rowH * 0.16f;
+    float searchH = rowH * 1.05f;
+
+    if (chestPickerRect.getWidth() <= 0.f) {
+        chestPickerRect = { rect.centerX() - w * 0.5f, rect.centerY() - rect.getHeight() * 0.34f,
+                            rect.centerX() + w * 0.5f, rect.centerY() + rect.getHeight() * 0.34f };
+    }
+    d2d::Rect pickerRect = chestPickerRect;
+    float h = rect.getHeight() * 0.68f;
+    pickerRect.bottom = pickerRect.top + h;
+    pickerRect.right = pickerRect.left + w;
+
+    dc.fillRoundedRectangle(pickerRect, d2d::Color::RGB(0x7, 0x7, 0x7).asAlpha(0.96f), 14.f);
+    dc.drawRoundedRectangle(pickerRect,
+                            pickerRecording ? accentColor.asAlpha(0.8f) : d2d::Color(1.f, 1.f, 1.f, 0.14f), 14.f,
+                            pickerRecording ? 2.f : 1.2f, DrawUtil::OutlinePosition::Inside);
+
+    float top = pickerRect.top + pad;
+    float left = pickerRect.left + pad;
+    float right = pickerRect.right - pad;
+
+    d2d::Rect xRect { right - titleH * 0.7f, top + titleH * 0.15f, right, top + titleH * 0.85f };
+    std::wstring title = chestItemsPicker.addMode
+        ? LocalizeString::get("client.ui.clickGui.chestItemsPicker.addTitle").value()
+        : LocalizeString::get("client.ui.clickGui.chestItemsPicker.title").value();
+    d2d::Rect titleRect = { left, top, xRect.left - pad * 0.5f, top + titleH };
+    dc.drawText(titleRect, title, d2d::Color(1.f, 1.f, 1.f, 1.f), FontSelection::PrimarySemilight, titleH * 0.55f,
+                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    dc.ctx->DrawBitmap(Necromancer::getAssets().xIcon.getBitmap(), xRect.get());
+    if (justClicked[0] && !chestItemsPicker.justOpened && xRect.contains(cursorPos)) {
+        chestItemsPicker.queueClose = true;
+        playClickSound();
+    }
+
+    d2d::Rect dragBar = { pickerRect.left, pickerRect.top, pickerRect.right, titleRect.bottom };
+    if (!chestItemsPicker.dragging && !chestItemsPicker.justOpened && justClicked[0] && dragBar.contains(cursorPos) &&
+        !xRect.contains(cursorPos)) {
+        chestItemsPicker.dragging = true;
+        chestItemsPicker.dragOffs = cursorPos - pickerRect.getPos();
+    }
+    if (!mouseButtons[0]) chestItemsPicker.dragging = false;
+    if (chestItemsPicker.dragging) {
+        chestPickerRect.setPos(cursorPos - chestItemsPicker.dragOffs);
+        pickerRect.setPos(cursorPos - chestItemsPicker.dragOffs);
+        auto ss = Necromancer::getRenderer().getScreenSize();
+        util::KeepInBounds(pickerRect, { 0.f, 0.f, ss.width, ss.height });
+        chestPickerRect = pickerRect;
+    }
+
+    float searchTop = titleRect.bottom + pad * 0.5f;
+    d2d::Rect searchRect = { left, searchTop, right, searchTop + searchH };
+    std::wstring searchText = chestItemsSearchBox.getText();
+    bool searchSelected = chestItemsSearchBox.isSelected();
+
+    if (justClicked[0] && !chestItemsPicker.justOpened && searchRect.contains(cursorPos)) {
+        chestItemsSearchBox.setSelected(true);
+    } else if (justClicked[0]) {
+        chestItemsSearchBox.setSelected(false);
+    }
+
+    dc.fillRoundedRectangle(searchRect, d2d::Color::RGB(0x8D, 0x8D, 0x8D).asAlpha(0.15f), searchRect.getHeight() * 0.22f);
+    std::wstring displayText = searchText;
+    if (displayText.empty() && !searchSelected) {
+        displayText = LocalizeString::get("client.ui.clickGui.itemSwitcherPicker.search").value();
+    }
+    dc.drawText(searchRect, displayText, searchText.empty() && !searchSelected ? d2d::Color(1.f, 1.f, 1.f, 0.3f) : d2d::Color(1.f, 1.f, 1.f, 1.f),
+                FontSelection::PrimaryRegular, searchH * 0.45f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    float listTop = searchRect.bottom + pad * 0.5f;
+    float listBottom = pickerRect.bottom - pad;
+    d2d::Rect listRect = { left, listTop, right, listBottom };
+    dc.ctx->PushAxisAlignedClip(listRect.get(), D2D1_ANTIALIAS_MODE_ALIASED);
+
+    std::wstring filter;
+    if (!searchText.empty()) {
+        filter = searchText;
+        for (auto& c : filter) c = towlower(c);
+    }
+
+    enum class RowAction : uint8_t {
+        None,
+        LimitDown,
+        LimitUp,
+        LimitEdit,
+        RemoveCustom,
+        AddCustom,
+        EditCustomCount,
+    };
+    RowAction rowAction = RowAction::None;
+    std::string rowActionId;
+    std::string rowActionLimit;
+
+    auto commitPendingEdits = [&]() {
+        if (!chestItemsPicker.editingId.empty()) commitChestItemCount();
+        if (!chestItemsPicker.editingLimit.empty()) commitChestLimitEdit();
+    };
+
+    auto drawCountField = [&](d2d::Rect const& fieldRect, std::string const& id, std::string const& limitName,
+                              int value) {
+        bool editing = (!id.empty() && chestItemsPicker.editingId == id) ||
+                       (!limitName.empty() && chestItemsPicker.editingLimit == limitName);
+        if (editing) {
+            chestItemsCountBox.setRect(fieldRect);
+            chestItemsCountBox.render(dc, fieldRect.getHeight() * 0.22f, d2d::Color::RGB(0x0, 0x0, 0x0).asAlpha(0.45f),
+                                      d2d::Color(1.f, 1.f, 1.f, 1.f));
+        } else {
+            dc.fillRoundedRectangle(fieldRect, d2d::Color::RGB(0x0, 0x0, 0x0).asAlpha(0.32f), fieldRect.getHeight() * 0.22f);
+            dc.drawText(fieldRect, std::to_wstring(value), d2d::Color(1.f, 1.f, 1.f, 0.95f), FontSelection::PrimaryRegular,
+                        fieldRect.getHeight() * 0.5f, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+
+        if (justClicked[0] && !chestItemsPicker.justOpened && fieldRect.contains(cursorPos)) {
+            commitPendingEdits();
+            if (!id.empty()) {
+                chestItemsPicker.editingId = id;
+                chestItemsPicker.editingLimit.clear();
+                chestItemsCountBox.setText(std::to_wstring(value));
+            } else {
+                chestItemsPicker.editingLimit = limitName;
+                chestItemsPicker.editingId.clear();
+                chestItemsCountBox.setText(std::to_wstring(value));
+            }
+            chestItemsCountBox.setSelected(true);
+            rowAction = RowAction::None;
+        }
+    };
+
+    auto drawStepper = [&](d2d::Rect const& btnRect, bool up) {
+        bool hov = btnRect.contains(cursorPos);
+        dc.fillRoundedRectangle(btnRect,
+                                hov ? accentColor.asAlpha(0.55f) : d2d::Color::RGB(0x8D, 0x8D, 0x8D).asAlpha(0.25f),
+                                btnRect.getHeight() * 0.22f);
+        dc.drawText(btnRect, up ? L"+" : L"-", d2d::Color(1.f, 1.f, 1.f, 0.9f), FontSelection::PrimaryRegular,
+                    btnRect.getHeight() * 0.6f, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        return hov && justClicked[0] && !chestItemsPicker.justOpened;
+    };
+
+    auto drawRowBg = [&](d2d::Rect const& rowRect, bool selected) {
+        if (selected) {
+            dc.fillRoundedRectangle(rowRect, accentColor.asAlpha(0.3f), rowRect.getHeight() * 0.22f);
+        } else if (rowRect.contains(cursorPos)) {
+            dc.fillRoundedRectangle(rowRect, d2d::Color(1.f, 1.f, 1.f, 0.08f), rowRect.getHeight() * 0.22f);
+        }
+    };
+
+    float contentY = listRect.top - chestItemsPicker.scroll;
+    float rowWidth = listRect.getWidth();
+    int visibleCount = 0;
+
+    auto sectionLabel = [&](std::wstring const& text) {
+        d2d::Rect labelRect = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH * 0.7f };
+        if (labelRect.bottom > listRect.top && labelRect.top < listRect.bottom) {
+            visibleCount++;
+            dc.drawText(labelRect, text, d2d::Color(1.f, 1.f, 1.f, 0.45f), FontSelection::PrimarySemilight,
+                        rowH * 0.32f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+        contentY += rowH * 0.7f + gap;
+    };
+
+    auto iconAndName = [&](d2d::Rect const& rowRect, std::string const& id, std::wstring const& label) {
+        float iconSize = rowH * 0.78f;
+        d2d::Rect iconRect { rowRect.left + rowH * 0.12f, rowRect.centerY(iconSize), rowRect.left + rowH * 0.12f + iconSize,
+                             rowRect.centerY(iconSize) + iconSize };
+        dc.fillRoundedRectangle(iconRect, d2d::Color(0.f, 0.f, 0.f).asAlpha(0.35f), iconSize * 0.15f);
+        ItemIconCache::drawItemIcon(dc, id, { iconRect.left + iconSize * 0.08f, iconRect.top + iconSize * 0.08f },
+                                    iconSize * 0.84f);
+
+        d2d::Rect textRect { iconRect.right + rowH * 0.18f, rowRect.top, rowRect.right - rowH * 2.9f, rowRect.bottom };
+        dc.drawSingleLineFitted(textRect, label, d2d::Color(1.f, 1.f, 1.f, 0.9f), FontSelection::PrimaryRegular,
+                                rowH * 0.4f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    };
+
+    if (!chestItemsPicker.addMode) {
+        sectionLabel(LocalizeString::get("client.ui.clickGui.chestItemsPicker.limitsSection").value());
+        for (auto const& name : mod->limitSettingNames()) {
+            std::wstring label = LocalizeString::get("client.module.chestStealer." + name + ".name").value();
+            float value = mod->maxValue(name);
+
+            d2d::Rect rowRect = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH };
+            if (rowRect.bottom > listRect.top && rowRect.top < listRect.bottom) {
+                visibleCount++;
+                drawRowBg(rowRect, false);
+
+                float btnW = rowH * 0.85f;
+                float btnGap = rowH * 0.14f;
+                d2d::Rect downRect { rowRect.right - btnW * 2.f - btnGap * 2.f - rowH * 1.35f, rowRect.top + rowH * 0.12f,
+                                     rowRect.right - btnW - btnGap * 2.f - rowH * 1.35f, rowRect.bottom - rowH * 0.12f };
+                d2d::Rect upRect { downRect.right + btnGap, rowRect.top + rowH * 0.12f, downRect.right + btnGap + btnW,
+                                   rowRect.bottom - rowH * 0.12f };
+                d2d::Rect valRect { upRect.right + btnGap, rowRect.top + rowH * 0.12f, upRect.right + btnGap + rowH * 1.2f,
+                                    rowRect.bottom - rowH * 0.12f };
+
+                if (drawStepper(downRect, false)) {
+                    commitPendingEdits();
+                    rowAction = RowAction::LimitDown;
+                    rowActionLimit = name;
+                }
+                if (drawStepper(upRect, true)) {
+                    commitPendingEdits();
+                    rowAction = RowAction::LimitUp;
+                    rowActionLimit = name;
+                }
+
+                drawCountField(valRect, "", name, static_cast<int>(value));
+
+                d2d::Rect textRect { rowRect.left + rowH * 0.15f, rowRect.top, downRect.left - rowH * 0.15f, rowRect.bottom };
+                dc.drawText(textRect, label, d2d::Color(1.f, 1.f, 1.f, 0.85f), FontSelection::PrimaryRegular,
+                            rowH * 0.4f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            } else {
+                visibleCount++;
+            }
+            contentY += rowH + gap;
+        }
+
+        sectionLabel(LocalizeString::get("client.ui.clickGui.chestItemsPicker.customSection").value());
+        auto custom = mod->customItemList();
+        if (custom.empty()) {
+            d2d::Rect emptyRect = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH * 0.8f };
+            if (emptyRect.bottom > listRect.top && emptyRect.top < listRect.bottom) {
+                visibleCount++;
+                dc.drawText(emptyRect, LocalizeString::get("client.ui.clickGui.chestItemsPicker.customEmpty").value(),
+                            d2d::Color(1.f, 1.f, 1.f, 0.4f), FontSelection::PrimaryRegular, rowH * 0.32f,
+                            DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            }
+            contentY += rowH * 0.8f + gap;
+        }
+        for (auto const& id : custom) {
+            d2d::Rect rowRect = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH };
+            if (rowRect.bottom > listRect.top && rowRect.top < listRect.bottom) {
+                visibleCount++;
+                drawRowBg(rowRect, true);
+
+                float btnW = rowH * 0.85f;
+                float btnGap = rowH * 0.14f;
+                d2d::Rect xBtn { rowRect.right - btnW, rowRect.top + rowH * 0.12f, rowRect.right, rowRect.bottom - rowH * 0.12f };
+                d2d::Rect upRect { xBtn.left - btnGap - btnW, rowRect.top + rowH * 0.12f, xBtn.left - btnGap,
+                                   rowRect.bottom - rowH * 0.12f };
+                d2d::Rect downRect { upRect.left - btnGap - btnW, rowRect.top + rowH * 0.12f, upRect.left - btnGap,
+                                     rowRect.bottom - rowH * 0.12f };
+                d2d::Rect valRect { downRect.left - btnGap - rowH * 1.2f, rowRect.top + rowH * 0.12f,
+                                    downRect.left - btnGap, rowRect.bottom - rowH * 0.12f };
+
+                if (drawStepper(downRect, false)) {
+                    commitPendingEdits();
+                    rowAction = RowAction::EditCustomCount;
+                    rowActionId = id;
+                    rowActionLimit = "down";
+                }
+                if (drawStepper(upRect, true)) {
+                    commitPendingEdits();
+                    rowAction = RowAction::EditCustomCount;
+                    rowActionId = id;
+                    rowActionLimit = "up";
+                }
+                drawCountField(valRect, id, "", mod->customItemCount(id));
+
+                dc.fillRoundedRectangle(xBtn, d2d::Color::RGB(0x8D, 0x8D, 0x8D).asAlpha(0.25f), xBtn.getHeight() * 0.22f);
+                dc.drawText(xBtn, L"x", d2d::Color(1.f, 1.f, 1.f, 0.9f), FontSelection::PrimaryRegular,
+                            xBtn.getHeight() * 0.5f, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                if (justClicked[0] && !chestItemsPicker.justOpened && xBtn.contains(cursorPos)) {
+                    commitPendingEdits();
+                    rowAction = RowAction::RemoveCustom;
+                    rowActionId = id;
+                }
+
+                iconAndName(rowRect, id, util::StrToWStr(id));
+            } else {
+                visibleCount++;
+            }
+            contentY += rowH + gap;
+        }
+
+        d2d::Rect addRow = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH };
+        if (addRow.bottom > listRect.top && addRow.top < listRect.bottom) {
+            visibleCount++;
+            bool hov = addRow.contains(cursorPos);
+            dc.fillRoundedRectangle(addRow, (hov ? accentColor : d2d::Color::RGB(0xD9, 0xD9, 0xD9)).asAlpha(hov ? 0.35f : 0.12f),
+                                    addRow.getHeight() * 0.22f);
+            dc.drawText(addRow, LocalizeString::get("client.ui.clickGui.chestItemsPicker.add").value(),
+                        d2d::Color(1.f, 1.f, 1.f, 0.95f), FontSelection::PrimaryRegular, rowH * 0.4f,
+                        DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            if (justClicked[0] && !chestItemsPicker.justOpened && addRow.contains(cursorPos)) {
+                commitPendingEdits();
+                chestItemsPicker.addMode = true;
+                chestItemsPicker.scroll = 0.f;
+                chestItemsSearchBox.reset();
+                playClickSound();
+            }
+        } else {
+            visibleCount++;
+        }
+        contentY += rowH + gap;
+    } else {
+        d2d::Rect backRow = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH * 0.85f };
+        if (backRow.bottom > listRect.top && backRow.top < listRect.bottom) {
+            visibleCount++;
+            bool hov = backRow.contains(cursorPos);
+            dc.fillRoundedRectangle(backRow, hov ? accentColor.asAlpha(0.35f) : d2d::Color::RGB(0xD9, 0xD9, 0xD9).asAlpha(0.12f),
+                                    backRow.getHeight() * 0.22f);
+            dc.drawText(backRow, L"< " + LocalizeString::get("client.ui.clickGui.chestItemsPicker.back").value(),
+                        d2d::Color(1.f, 1.f, 1.f, 0.9f), FontSelection::PrimaryRegular, rowH * 0.36f,
+                        DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            if (justClicked[0] && !chestItemsPicker.justOpened && backRow.contains(cursorPos)) {
+                chestItemsPicker.addMode = false;
+                chestItemsPicker.scroll = 0.f;
+                playClickSound();
+            }
+        }
+        contentY += rowH * 0.85f + gap;
+
+        auto& entries = ItemCatalog::get().entries();
+        for (auto& entry : entries) {
+            if (!filter.empty() && entry.searchKey.find(filter) == std::wstring::npos) continue;
+            visibleCount++;
+
+            d2d::Rect rowRect = { listRect.left, contentY, listRect.left + rowWidth, contentY + rowH };
+            if (rowRect.bottom > listRect.top && rowRect.top < listRect.bottom) {
+                bool selected = mod->hasCustomItem(entry.id);
+                drawRowBg(rowRect, selected);
+
+                if (justClicked[0] && !chestItemsPicker.justOpened && rowRect.contains(cursorPos)) {
+                    rowAction = RowAction::AddCustom;
+                    rowActionId = entry.id;
+                }
+
+                iconAndName(rowRect, entry.id, entry.displayName);
+
+                if (selected) {
+                    float checkSize = rowH * 0.6f;
+                    d2d::Rect checkRect { rowRect.right - checkSize - rowH * 0.15f, rowRect.centerY(checkSize),
+                                          rowRect.right - rowH * 0.15f, rowRect.centerY(checkSize) + checkSize };
+                    dc.ctx->DrawBitmap(Necromancer::getAssets().checkmarkIcon.getBitmap(), checkRect.get());
+                }
+            }
+            contentY += rowH + gap;
+        }
+
+        if (visibleCount <= 1) {
+            dc.drawText(listRect, LocalizeString::get("client.ui.clickGui.keybinds.cond.noItems.name").value(),
+                        d2d::Color(1.f, 1.f, 1.f, 0.45f), FontSelection::PrimaryRegular, rowH * 0.4f,
+                        DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+    }
+
+    chestItemsPicker.scrollMax =
+        (std::max)(0.f, static_cast<float>(visibleCount) * (rowH + gap) - listRect.getHeight());
+    chestItemsPicker.scroll = std::clamp(chestItemsPicker.scroll, 0.f, chestItemsPicker.scrollMax);
+
+    dc.ctx->PopAxisAlignedClip();
+
+    if (rowAction != RowAction::None) {
+        playClickSound();
+        switch (rowAction) {
+        case RowAction::LimitDown:
+            mod->bumpMax(rowActionLimit, -1);
+            break;
+        case RowAction::LimitUp:
+            mod->bumpMax(rowActionLimit, 1);
+            break;
+        case RowAction::RemoveCustom:
+            mod->removeCustomItem(rowActionId);
+            break;
+        case RowAction::AddCustom:
+            if (!mod->hasCustomItem(rowActionId)) mod->addCustomItem(rowActionId);
+            break;
+        case RowAction::EditCustomCount:
+            mod->setCustomItemCount(rowActionId,
+                                    std::clamp(mod->customItemCount(rowActionId) + (rowActionLimit == "up" ? 1 : -1), 0, 2304));
+            break;
+        default:
+            break;
+        }
+
+        if (rowAction == RowAction::RemoveCustom || rowAction == RowAction::AddCustom ||
+            rowAction == RowAction::EditCustomCount) {
+            if (pickerRecording) {
+                Setting* dataSet = nullptr;
+                mod->settings->forEach([&](std::shared_ptr<Setting> s) {
+                    if (!dataSet && s->name() == "customItems") dataSet = s.get();
+                });
+                if (dataSet) {
+                    nlohmann::json stored;
+                    std::get<TextValue>(*dataSet->value).store(stored);
+                    recordPickerEdit(dataSet, (size_t)Setting::Type::Text, std::move(stored));
+                }
+            }
+        }
+    }
+
+    if (chestItemsCountBox.isSelected()) {
+        bool enterDown = GetAsyncKeyState(VK_RETURN) & 0x8000;
+        if (enterDown) {
+            if (!chestItemsPicker.editingId.empty()) commitChestItemCount();
+            if (!chestItemsPicker.editingLimit.empty()) commitChestLimitEdit();
+        }
+    }
+
+    if (chestItemsPicker.justOpened) {
+        chestItemsPicker.justOpened = false;
+    } else if (justClicked[0] && !pickerRect.contains(cursorPos)) {
+        chestItemsPicker.queueClose = true;
     }
 }
 
@@ -4400,6 +4967,8 @@ void ClickGUI::onDisable() {
     closeBlockPicker();
 
     if (itemSwitcherPicker.mod) closeItemSwitcher();
+    if (chestItemsPicker.mod) closeChestStealerItems();
+    if (condCanvas.open) closeCondCanvas();
 
     clearSettingBoxFocus();
 

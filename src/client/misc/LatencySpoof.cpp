@@ -24,19 +24,19 @@ namespace {
         uint32_t unused;  // +0x0C
         // destination sockaddr blob lives inline at +0x10
     };
-    static constexpr size_t sendParamAddrOffset = 0x10;
+    static constexpr size_t sendParamAddrOffset = Signatures::FieldOffset::RakNetSendParameters::systemAddress;
     // Per-send TTL. When > 0 the game brackets the sendto with getsockopt/setsockopt
     // to change TTL for that one datagram, which means it is a probe (MTU discovery
     // / LAN scan), not game traffic. We cannot reproduce that bracketing on replay,
     // so those are never delayed.
-    static constexpr size_t sendParamTtlOffset = 0x98;
+    static constexpr size_t sendParamTtlOffset = Signatures::FieldOffset::RakNetSendParameters::ttl;
     // The RakNet socket object keeps the OS handle here (v6 = *(int*)(a1 + 184)).
-    static constexpr size_t socketHandleOffset = 184;
+    static constexpr size_t socketHandleOffset = Signatures::FieldOffset::RakNetSendParameters::socketHandle;
     // An optional alternate send interface gets first refusal (a1 + 264): if it is
     // present and succeeds, the real function never reaches sendto at all. When it
     // exists we must not delay, because the OS handle at +184 is then not
     // necessarily the live transport and a replayed datagram would go nowhere.
-    static constexpr size_t altInterfaceOffset = 264;
+    static constexpr size_t altInterfaceOffset = Signatures::FieldOffset::RakNetSendParameters::altInterface;
 
     // Windows address families, as compared in the original function.
     constexpr uint16_t familyIPv4 = 2;   // AF_INET  -> tolen 16
@@ -81,6 +81,119 @@ namespace {
     std::thread releaseThread;
 
     using SendFn = int64_t (*)(void*, void*);
+
+    constexpr size_t socketRecvHandlerOffset = 0xF0;
+
+    // The recv thread allocates a 1760-byte RNS2RecvStruct per datagram and hands
+    // ownership to OnRNS2Recv (handler vtable slot 1). Holding the pointer is
+    // therefore ownership-correct: on release we call the original OnRNS2Recv
+    // with it and the game's pipeline consumes and frees it as if it had just
+    // arrived off the socket.
+    struct HeldRecv {
+        void* handler;
+        void* recvStruct;
+        std::chrono::steady_clock::time_point releaseAt;
+    };
+
+    std::mutex recvLock;
+    std::deque<HeldRecv> recvQueue;
+    std::atomic<uint32_t> inboundDelayMs { 0 };
+    std::atomic<bool> inboundFrozen { false };
+    std::atomic<uint64_t> inboundHeldTotal { 0 };
+    constexpr size_t maxHeldRecv = 4096;
+
+    void* recvHandlerSlot = nullptr;
+    void* recvOriginalFn = nullptr;
+    std::atomic<bool> recvHookInstalled { false };
+
+    using RecvFn = void (*)(void*, void*);
+
+    bool inboundControlActive() {
+        return inboundFrozen.load(std::memory_order_acquire) || inboundDelayMs.load(std::memory_order_relaxed) > 0;
+    }
+
+    void armRecvHook(void* socket);
+
+    void recvDetour(void* handler, void* recvStruct) {
+        if (!recvHookInstalled.load(std::memory_order_acquire)) {
+            reinterpret_cast<RecvFn>(recvOriginalFn)(handler, recvStruct);
+            return;
+        }
+
+        bool frozen = inboundFrozen.load(std::memory_order_acquire);
+        uint32_t delay = inboundDelayMs.load(std::memory_order_relaxed);
+        if (!frozen && delay == 0) {
+            reinterpret_cast<RecvFn>(recvOriginalFn)(handler, recvStruct);
+            return;
+        }
+
+        {
+            std::lock_guard lk(recvLock);
+            if (!inboundControlActive()) {
+                reinterpret_cast<RecvFn>(recvOriginalFn)(handler, recvStruct);
+                return;
+            }
+            if (recvQueue.size() >= maxHeldRecv) {
+                // Bounded hold: feed the oldest through so the backlog can never
+                // outgrow the cap. Ownership of the delivered one moves to the game.
+                auto& front = recvQueue.front();
+                reinterpret_cast<RecvFn>(recvOriginalFn)(front.handler, front.recvStruct);
+                recvQueue.pop_front();
+            }
+            recvQueue.push_back({ handler, recvStruct,
+                                  frozen ? std::chrono::steady_clock::time_point::max()
+                                         : std::chrono::steady_clock::now() +
+                                               std::chrono::milliseconds(delay) });
+        }
+        inboundHeldTotal.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void flushInbound() {
+        std::deque<HeldRecv> pending;
+        {
+            std::lock_guard lk(recvLock);
+            pending.swap(recvQueue);
+        }
+        for (auto& entry : pending) reinterpret_cast<RecvFn>(recvOriginalFn)(entry.handler, entry.recvStruct);
+    }
+
+    void pumpInboundRecv() {
+        if (!inboundControlActive()) return;
+        if (inboundFrozen.load(std::memory_order_acquire)) return;
+
+        auto now = std::chrono::steady_clock::now();
+        std::deque<HeldRecv> due;
+        {
+            std::lock_guard lk(recvLock);
+            while (!recvQueue.empty() && recvQueue.front().releaseAt <= now) {
+                due.push_back(recvQueue.front());
+                recvQueue.pop_front();
+            }
+        }
+        for (auto& entry : due) reinterpret_cast<RecvFn>(recvOriginalFn)(entry.handler, entry.recvStruct);
+    }
+
+    bool installRecvHook();
+
+    void uninstallRecvHook() {
+        if (!recvHookInstalled.exchange(false, std::memory_order_acq_rel)) return;
+        if (!recvHandlerSlot || !recvOriginalFn) return;
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(recvHandlerSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+        *static_cast<void**>(recvHandlerSlot) = recvOriginalFn;
+        VirtualProtect(recvHandlerSlot, sizeof(void*), oldProtect, &oldProtect);
+        FlushInstructionCache(GetCurrentProcess(), recvHandlerSlot, sizeof(void*));
+    }
+
+    void armRecvHook(void* socket) {
+        if (!socket || recvHandlerSlot) return;
+        void* handler = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(socket) + socketRecvHandlerOffset);
+        if (!handler) return;
+        void** vft = *reinterpret_cast<void***>(handler);
+        if (!vft || !vft[1]) return;
+        recvOriginalFn = vft[1];
+        recvHandlerSlot = vft + 1;
+    }
 
     void sendDatagram(HeldDatagram& datagram) {
         if (datagram.sock == INVALID_SOCKET || datagram.bytes.empty()) return;
@@ -128,6 +241,7 @@ namespace {
     void releaseLoop() {
         while (running.load(std::memory_order_relaxed)) {
             auto now = std::chrono::steady_clock::now();
+            pumpInboundRecv();
             for (;;) {
                 HeldDatagram out;
                 {
@@ -147,6 +261,7 @@ namespace {
 
     int64_t detour(void* self, void* params) {
         std::lock_guard sendLock(sendGate);
+        armRecvHook(self);
         uint32_t delay = latencyMs.load(std::memory_order_relaxed);
         bool holdForChoke = choking.load(std::memory_order_acquire);
         if ((!holdForChoke && delay == 0) || !params) {
@@ -252,8 +367,15 @@ namespace LatencySpoof {
     void shutdown() {
         choking.store(false, std::memory_order_release);
         latencyMs.store(0, std::memory_order_release);
+        inboundFrozen.store(false, std::memory_order_release);
+        inboundDelayMs.store(0, std::memory_order_release);
         running.store(false, std::memory_order_release);
         if (releaseThread.joinable()) releaseThread.join();
+        // Restore the handler vtable BEFORE replaying held structs: after the slot
+        // is back to the original, nothing enters our detour anymore, so the
+        // backlog can drain safely through the game's own handler.
+        uninstallRecvHook();
+        flushInbound();
         {
             std::lock_guard sendLock(sendGate);
             drainQueueLocked(queue);
@@ -299,4 +421,44 @@ namespace LatencySpoof {
     bool hooked() { return installed.load(); }
     uint64_t heldCount() { return held.load(std::memory_order_relaxed); }
     uint64_t passedCount() { return passed.load(std::memory_order_relaxed); }
+
+    bool installRecvHook() {
+        if (recvHookInstalled.load(std::memory_order_acquire)) return true;
+        std::lock_guard sendLock(sendGate);
+        if (recvHookInstalled.load(std::memory_order_acquire)) return true;
+        if (!recvHandlerSlot || !recvOriginalFn) return false;
+
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(recvHandlerSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+        *static_cast<void**>(recvHandlerSlot) = reinterpret_cast<void*>(&recvDetour);
+        VirtualProtect(recvHandlerSlot, sizeof(void*), oldProtect, &oldProtect);
+        FlushInstructionCache(GetCurrentProcess(), recvHandlerSlot, sizeof(void*));
+
+        recvHookInstalled.store(true, std::memory_order_release);
+        return true;
+    }
+
+    void setInboundDelay(uint32_t ms) {
+        inboundDelayMs.store(ms, std::memory_order_relaxed);
+        if (ms > 0 || inboundFrozen.load(std::memory_order_acquire)) {
+            if (!installRecvHook()) inboundDelayMs.store(0, std::memory_order_relaxed);
+            return;
+        }
+        if (recvHookInstalled.load(std::memory_order_acquire)) flushInbound();
+    }
+
+    void setInboundFrozen(bool frozen) {
+        if (frozen) {
+            inboundFrozen.store(true, std::memory_order_release);
+            installRecvHook();
+            return;
+        }
+        if (!inboundFrozen.exchange(false, std::memory_order_acq_rel)) return;
+        if (recvHookInstalled.load(std::memory_order_acquire)) flushInbound();
+    }
+
+    bool inboundHooked() { return recvHookInstalled.load(std::memory_order_acquire); }
+    uint64_t inboundHeldCount() { return inboundHeldTotal.load(std::memory_order_relaxed); }
+
+    uint32_t getInboundDelay() { return inboundDelayMs.load(std::memory_order_relaxed); }
 }

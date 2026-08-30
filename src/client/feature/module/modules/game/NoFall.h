@@ -6,6 +6,7 @@
 
 namespace SDK {
     class Player;
+    class HitResult;
     class LocalPlayer;
 }
 
@@ -15,6 +16,7 @@ public:
 
     void onUpdate(Event& evG);
     void onTick(Event& evG);
+    void onBeforeMove(Event& evG);
     void runClutch();
     void onSendPacket(Event& evG);
     void onEnable() override;
@@ -33,6 +35,7 @@ private:
     ValueType disableWithMace = BoolValue(true);
     ValueType ignorePlacedWater = BoolValue(true);
     ValueType pickUpWater = BoolValue(true);
+    ValueType psilent = BoolValue(false);
     ValueType useFakelag = BoolValue(false);
     ValueType freezeTicks = FloatValue(6.f);
 
@@ -57,14 +60,14 @@ private:
     std::chrono::steady_clock::time_point lastAimFrame {};
     std::chrono::steady_clock::time_point placedAt {};
     std::chrono::steady_clock::time_point cooldownUntil {};
-    std::chrono::steady_clock::time_point lastWindowLog {};
     std::chrono::steady_clock::time_point slowFallSince {};
-    std::chrono::steady_clock::time_point lastBucketWarn {};
-    std::chrono::steady_clock::time_point lastFallLog {};
     std::chrono::steady_clock::time_point landedAt {};
     std::chrono::steady_clock::time_point pickupStartedAt {};
     std::chrono::steady_clock::time_point pickupClickedAt {};
-    std::chrono::steady_clock::time_point lastStateLog {};
+    std::chrono::steady_clock::time_point lastPickupAttempt {};
+    Vec2 savedRot {};
+    bool rotSpoofed = false;
+    std::chrono::steady_clock::time_point rotSpoofedAt {};
 
     struct TunedParams {
         float aimDistance;
@@ -80,5 +83,10 @@ private:
     void resetClutch();
     bool maceLockout(SDK::Player* lp);
     float aimAtWater(SDK::LocalPlayer* lp);
+    bool psilentEnabled() const;
+    void restoreSilentRot(SDK::LocalPlayer* lp);
+    void maybeRestoreRot(SDK::LocalPlayer* lp);
+    void finishClutch(SDK::Player* lp);
+    void applySilentClick(SDK::LocalPlayer* lp, Vec3 const& aimPoint);
     bool runPickup(SDK::LocalPlayer* lp, std::chrono::steady_clock::time_point now);
 };

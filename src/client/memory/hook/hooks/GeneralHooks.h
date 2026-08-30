@@ -4,6 +4,11 @@
 #include <mc/common/world/Weather.h>
 #include <mc/common/client/renderer/game/CameraComponent.h>
 
+namespace SDK {
+    class Tessellator;
+    class MaterialPtr;
+}
+
 class GenericHooks : public HookGroup {
     static void __fastcall MultiPlayerLevel__subTick(SDK::Level* level);
     static void* __fastcall ChatScreenController_sendChatMessage(void* controller, std::string& message);

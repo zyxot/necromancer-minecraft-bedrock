@@ -1,12 +1,14 @@
 #include "pch.h"
-#include "LegitScaffold.h"
+#include "Scaffolding.h"
 
 #include "client/event/events/BuildBlockEvent.h"
 #include "client/event/events/TickEvent.h"
 #include "client/Necromancer.h"
 #include "client/screen/ScreenManager.h"
 #include "client/misc/BlockSolid.h"
+#include "client/misc/BoxBuilder.h"
 #include "client/misc/MovementSim.h"
+#include "client/misc/SlotLease.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/player/LocalPlayer.h"
 #include "mc/common/world/actor/player/PlayerInventory.h"
@@ -17,6 +19,7 @@
 
 namespace {
     constexpr float pi_f = 3.14159265358979323846f;
+    constexpr int stuckHealTicks = 40;
 
     int floori(float v) {
         return static_cast<int>(std::floor(v));
@@ -63,43 +66,43 @@ namespace {
     }
 }
 
-LegitScaffold::LegitScaffold()
-    : Module("LegitScaffold", LocalizeString::get("client.module.legitScaffold.name"),
-             LocalizeString::get("client.module.legitScaffold.desc"), GAME, nokeybind) {
-    listen<BuildBlockEvent>(static_cast<EventListenerFunc>(&LegitScaffold::onBuildBlock));
-    listen<TickEvent>(static_cast<EventListenerFunc>(&LegitScaffold::onTick));
+Scaffolding::Scaffolding()
+    : Module("Scaffolding", LocalizeString::get("client.module.scaffolding.name"),
+             LocalizeString::get("client.module.scaffolding.desc"), GAME, nokeybind) {
+    listen<BuildBlockEvent>(static_cast<EventListenerFunc>(&Scaffolding::onBuildBlock));
+    listen<TickEvent>(static_cast<EventListenerFunc>(&Scaffolding::onTick));
 
-    addSetting("allowUp", LocalizeString::get("client.module.legitScaffold.allowUp.name"),
-               LocalizeString::get("client.module.legitScaffold.allowUp.desc"), allowUp);
-    addSetting("speedBridge", LocalizeString::get("client.module.legitScaffold.speedBridge.name"),
-               LocalizeString::get("client.module.legitScaffold.speedBridge.desc"), speedBridge);
-    addSliderSetting("bridgeReach", LocalizeString::get("client.module.legitScaffold.bridgeReach.name"),
-                     LocalizeString::get("client.module.legitScaffold.bridgeReach.desc"), bridgeReach, FloatValue(1.f),
+    addSetting("allowUp", LocalizeString::get("client.module.scaffolding.allowUp.name"),
+               LocalizeString::get("client.module.scaffolding.allowUp.desc"), allowUp);
+    addSetting("speedBridge", LocalizeString::get("client.module.scaffolding.speedBridge.name"),
+               LocalizeString::get("client.module.scaffolding.speedBridge.desc"), speedBridge);
+    addSliderSetting("bridgeReach", LocalizeString::get("client.module.scaffolding.bridgeReach.name"),
+                     LocalizeString::get("client.module.scaffolding.bridgeReach.desc"), bridgeReach, FloatValue(1.f),
                      FloatValue(5.f), FloatValue(0.5f), "speedBridge"_istrue);
-    addSetting("straightOnly", LocalizeString::get("client.module.legitScaffold.straightOnly.name"),
-               LocalizeString::get("client.module.legitScaffold.straightOnly.desc"), straightOnly,
+    addSetting("straightOnly", LocalizeString::get("client.module.scaffolding.straightOnly.name"),
+               LocalizeString::get("client.module.scaffolding.straightOnly.desc"), straightOnly,
                "speedBridge"_istrue);
-    addSliderSetting("bridgeDrop", LocalizeString::get("client.module.legitScaffold.bridgeDrop.name"),
-                     LocalizeString::get("client.module.legitScaffold.bridgeDrop.desc"), bridgeDrop, FloatValue(0.f),
+    addSliderSetting("bridgeDrop", LocalizeString::get("client.module.scaffolding.bridgeDrop.name"),
+                     LocalizeString::get("client.module.scaffolding.bridgeDrop.desc"), bridgeDrop, FloatValue(0.f),
                      FloatValue(5.f), FloatValue(1.f), "speedBridge"_istrue);
-    addSliderSetting("bridgeDelay", LocalizeString::get("client.module.legitScaffold.bridgeDelay.name"),
-                     LocalizeString::get("client.module.legitScaffold.bridgeDelay.desc"), bridgeDelay, FloatValue(0.f),
+    addSliderSetting("bridgeDelay", LocalizeString::get("client.module.scaffolding.bridgeDelay.name"),
+                     LocalizeString::get("client.module.scaffolding.bridgeDelay.desc"), bridgeDelay, FloatValue(0.f),
                      FloatValue(200.f), FloatValue(5.f), "speedBridge"_istrue);
     addSliderSetting("bridgeBlocksPerTick",
-                     LocalizeString::get("client.module.legitScaffold.bridgeBlocksPerTick.name"),
-                     LocalizeString::get("client.module.legitScaffold.bridgeBlocksPerTick.desc"), bridgeBlocksPerTick,
+                     LocalizeString::get("client.module.scaffolding.bridgeBlocksPerTick.name"),
+                     LocalizeString::get("client.module.scaffolding.bridgeBlocksPerTick.desc"), bridgeBlocksPerTick,
                      FloatValue(1.f), FloatValue(5.f), FloatValue(1.f), "speedBridge"_istrue);
-    addSetting("requireHoldUse", LocalizeString::get("client.module.legitScaffold.requireHoldUse.name"),
-               LocalizeString::get("client.module.legitScaffold.requireHoldUse.desc"), requireHoldUse,
+    addSetting("requireHoldUse", LocalizeString::get("client.module.scaffolding.requireHoldUse.name"),
+               LocalizeString::get("client.module.scaffolding.requireHoldUse.desc"), requireHoldUse,
                "speedBridge"_istrue);
-    addSetting("requireMoving", LocalizeString::get("client.module.legitScaffold.requireMoving.name"),
-               LocalizeString::get("client.module.legitScaffold.requireMoving.desc"), requireMoving,
+    addSetting("requireMoving", LocalizeString::get("client.module.scaffolding.requireMoving.name"),
+               LocalizeString::get("client.module.scaffolding.requireMoving.desc"), requireMoving,
                "speedBridge"_istrue);
-    addSetting("requireLookDown", LocalizeString::get("client.module.legitScaffold.requireLookDown.name"),
-               LocalizeString::get("client.module.legitScaffold.requireLookDown.desc"), requireLookDown,
+    addSetting("requireLookDown", LocalizeString::get("client.module.scaffolding.requireLookDown.name"),
+               LocalizeString::get("client.module.scaffolding.requireLookDown.desc"), requireLookDown,
                "speedBridge"_istrue);
-    addSliderSetting("minPitch", LocalizeString::get("client.module.legitScaffold.minPitch.name"),
-                     LocalizeString::get("client.module.legitScaffold.minPitch.desc"), minPitch, FloatValue(0.f),
+    addSliderSetting("minPitch", LocalizeString::get("client.module.scaffolding.minPitch.name"),
+                     LocalizeString::get("client.module.scaffolding.minPitch.desc"), minPitch, FloatValue(0.f),
                      FloatValue(89.f), FloatValue(1.f),
                      Setting::Condition(std::vector<Setting::SingleCond> {
                          { "speedBridge", { 1 }, false },
@@ -110,51 +113,57 @@ LegitScaffold::LegitScaffold()
         { "directionBased", { 1 }, false },
     });
 
-    addSetting("directionBased", LocalizeString::get("client.module.legitScaffold.directionBased.name"),
-               LocalizeString::get("client.module.legitScaffold.directionBased.desc"), directionBased,
+    addSetting("directionBased", LocalizeString::get("client.module.scaffolding.directionBased.name"),
+               LocalizeString::get("client.module.scaffolding.directionBased.desc"), directionBased,
                "speedBridge"_istrue);
-    addSetting("dirForward", LocalizeString::get("client.module.legitScaffold.dirForward.name"),
-               LocalizeString::get("client.module.legitScaffold.dirForward.desc"), dirForward, dirCond);
-    addSetting("dirBackward", LocalizeString::get("client.module.legitScaffold.dirBackward.name"),
-               LocalizeString::get("client.module.legitScaffold.dirBackward.desc"), dirBackward, dirCond);
-    addSetting("dirLeft", LocalizeString::get("client.module.legitScaffold.dirLeft.name"),
-               LocalizeString::get("client.module.legitScaffold.dirLeft.desc"), dirLeft, dirCond);
-    addSetting("dirRight", LocalizeString::get("client.module.legitScaffold.dirRight.name"),
-               LocalizeString::get("client.module.legitScaffold.dirRight.desc"), dirRight, dirCond);
-    addSetting("dirDiagonalFill", LocalizeString::get("client.module.legitScaffold.dirDiagonalFill.name"),
-               LocalizeString::get("client.module.legitScaffold.dirDiagonalFill.desc"), dirDiagonalFill,
+    addSetting("dirForward", LocalizeString::get("client.module.scaffolding.dirForward.name"),
+               LocalizeString::get("client.module.scaffolding.dirForward.desc"), dirForward, dirCond);
+    addSetting("dirBackward", LocalizeString::get("client.module.scaffolding.dirBackward.name"),
+               LocalizeString::get("client.module.scaffolding.dirBackward.desc"), dirBackward, dirCond);
+    addSetting("dirLeft", LocalizeString::get("client.module.scaffolding.dirLeft.name"),
+               LocalizeString::get("client.module.scaffolding.dirLeft.desc"), dirLeft, dirCond);
+    addSetting("dirRight", LocalizeString::get("client.module.scaffolding.dirRight.name"),
+               LocalizeString::get("client.module.scaffolding.dirRight.desc"), dirRight, dirCond);
+    addSetting("dirDiagonalFill", LocalizeString::get("client.module.scaffolding.dirDiagonalFill.name"),
+               LocalizeString::get("client.module.scaffolding.dirDiagonalFill.desc"), dirDiagonalFill,
                Setting::Condition(std::vector<Setting::SingleCond> {
                    { "speedBridge", { 1 }, false },
                    { "directionBased", { 1 }, false },
                    { "straightOnly", { 0 }, false },
                }));
-    addSliderSetting("dirSimTicks", LocalizeString::get("client.module.legitScaffold.dirSimTicks.name"),
-                     LocalizeString::get("client.module.legitScaffold.dirSimTicks.desc"), dirSimTicks, FloatValue(1.f),
+    addSliderSetting("dirSimTicks", LocalizeString::get("client.module.scaffolding.dirSimTicks.name"),
+                     LocalizeString::get("client.module.scaffolding.dirSimTicks.desc"), dirSimTicks, FloatValue(1.f),
                      FloatValue(20.f), FloatValue(1.f), dirCond);
-    addSliderSetting("dirMinSpeed", LocalizeString::get("client.module.legitScaffold.dirMinSpeed.name"),
-                     LocalizeString::get("client.module.legitScaffold.dirMinSpeed.desc"), dirMinSpeed, FloatValue(0.f),
+    addSliderSetting("dirMinSpeed", LocalizeString::get("client.module.scaffolding.dirMinSpeed.name"),
+                     LocalizeString::get("client.module.scaffolding.dirMinSpeed.desc"), dirMinSpeed, FloatValue(0.f),
                      FloatValue(0.5f), FloatValue(0.01f), dirCond);
-    addSliderSetting("dirBlendCamera", LocalizeString::get("client.module.legitScaffold.dirBlendCamera.name"),
-                     LocalizeString::get("client.module.legitScaffold.dirBlendCamera.desc"), dirBlendCamera,
+    addSliderSetting("dirBlendCamera", LocalizeString::get("client.module.scaffolding.dirBlendCamera.name"),
+                     LocalizeString::get("client.module.scaffolding.dirBlendCamera.desc"), dirBlendCamera,
                      FloatValue(0.f), FloatValue(1.f), FloatValue(0.05f), dirCond);
 }
 
-int LegitScaffold::blocksPerPlacement() const {
+int Scaffolding::blocksPerPlacement() const {
     if (!std::get<BoolValue>(speedBridge).value) return 0;
     return std::max(1, static_cast<int>(std::get<FloatValue>(bridgeBlocksPerTick).value));
 }
 
-void LegitScaffold::onDisable() {
+void Scaffolding::resetBridgeState() {
     bridging = false;
     hasBridgeY = false;
     bridgeY = 0;
     nextPlace = {};
+    failStreak = 0;
 }
 
-void LegitScaffold::onBuildBlock(Event& evG) {
+void Scaffolding::onDisable() {
+    resetBridgeState();
+}
+
+void Scaffolding::onBuildBlock(Event& evG) {
     auto& ev = reinterpret_cast<BuildBlockEvent&>(evG);
 
     if (bridging) return;
+    if (BoxBuilder::placementBypassActive()) return;
 
     auto ci = SDK::ClientInstance::get();
     auto plr = ci ? ci->getLocalPlayer() : nullptr;
@@ -171,8 +180,8 @@ void LegitScaffold::onBuildBlock(Event& evG) {
     }
 }
 
-bool LegitScaffold::findSupport(SDK::BlockSource* region, BlockPos const& target, BlockPos& outSupport,
-                               uint8_t& outFace) const {
+bool Scaffolding::findSupport(SDK::BlockSource* region, BlockPos const& target, BlockPos& outSupport,
+                              uint8_t& outFace) const {
     static constexpr int offX[6] = { 0, 0, 0, 0, -1, 1 };
     static constexpr int offY[6] = { -1, 1, 0, 0, 0, 0 };
     static constexpr int offZ[6] = { 0, 0, -1, 1, 0, 0 };
@@ -197,7 +206,7 @@ bool LegitScaffold::findSupport(SDK::BlockSource* region, BlockPos const& target
     return false;
 }
 
-Vec3 LegitScaffold::resolveBridgeDir(SDK::Player* plr) const {
+Vec3 Scaffolding::resolveBridgeDir(SDK::Player* plr) const {
     auto* lp = static_cast<SDK::LocalPlayer*>(plr);
     Vec3 camera = flatLookDir(lp->getRot());
 
@@ -304,8 +313,8 @@ Vec3 LegitScaffold::resolveBridgeDir(SDK::Player* plr) const {
     return snapAxis(chosen);
 }
 
-void LegitScaffold::collectUnderCandidate(SDK::Player* plr, SDK::BlockSource* region, int placeY,
-                                          std::vector<Candidate>& out) const {
+void Scaffolding::collectUnderCandidate(SDK::Player* plr, SDK::BlockSource* region, int placeY,
+                                        std::vector<Candidate>& out) const {
     auto* lp = static_cast<SDK::LocalPlayer*>(plr);
     Vec3 feet = feetPos(lp);
     Vec3 eye = eyePos(lp);
@@ -329,8 +338,8 @@ void LegitScaffold::collectUnderCandidate(SDK::Player* plr, SDK::BlockSource* re
     out.push_back(Candidate { support, face });
 }
 
-void LegitScaffold::collectCandidates(SDK::Player* plr, SDK::BlockSource* region, int placeY,
-                                      std::vector<Candidate>& out) const {
+void Scaffolding::collectCandidates(SDK::Player* plr, SDK::BlockSource* region, int placeY,
+                                    std::vector<Candidate>& out) const {
     auto* lp = static_cast<SDK::LocalPlayer*>(plr);
     Vec3 feet = feetPos(lp);
     Vec3 forward = resolveBridgeDir(plr);
@@ -394,7 +403,7 @@ void LegitScaffold::collectCandidates(SDK::Player* plr, SDK::BlockSource* region
     }
 }
 
-void LegitScaffold::onTick(Event&) {
+void Scaffolding::onTick(Event&) {
     if (!std::get<BoolValue>(speedBridge)) {
         bridging = false;
         return;
@@ -411,6 +420,8 @@ void LegitScaffold::onTick(Event&) {
 
     auto held = plr->supplies->inventory->getItem(sel);
     if (!held || held->itemCount <= 0 || !held->block) return;
+
+    if (SlotLease::busyForOthers("Scaffolding")) return;
 
     if (std::get<BoolValue>(requireHoldUse) && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0) return;
 
@@ -460,7 +471,10 @@ void LegitScaffold::onTick(Event&) {
         if (!candidates.empty()) bridgeY = towerY;
     }
     if (candidates.empty()) collectCandidates(plr, region, bridgeY, candidates);
-    if (candidates.empty()) return;
+    if (candidates.empty()) {
+        if (++failStreak >= stuckHealTicks) resetBridgeState();
+        return;
+    }
 
     bridging = true;
     int placedCount = 0;
@@ -492,13 +506,18 @@ void LegitScaffold::onTick(Event&) {
     }
     bridging = false;
 
-    if (placedCount == 0) return;
+    if (placedCount == 0) {
+        if (++failStreak >= stuckHealTicks) resetBridgeState();
+        return;
+    }
+
+    failStreak = 0;
 
     auto delayMs = static_cast<int>(std::get<FloatValue>(bridgeDelay).value);
     nextPlace = now + std::chrono::milliseconds(std::max(0, delayMs));
 }
 
-bool LegitScaffold::shouldAllow(BlockPos const& blockPos, uint8_t face) const {
+bool Scaffolding::shouldAllow(BlockPos const& blockPos, uint8_t face) const {
     auto ci = SDK::ClientInstance::get();
     auto plr = ci ? ci->getLocalPlayer() : nullptr;
     if (!plr) return true;
@@ -532,7 +551,7 @@ bool LegitScaffold::shouldAllow(BlockPos const& blockPos, uint8_t face) const {
     return (nx * dx + nz * dz) >= -0.0001f;
 }
 
-bool LegitScaffold::isBelowFeet(BlockPos const& blockPos) const {
+bool Scaffolding::isBelowFeet(BlockPos const& blockPos) const {
     auto ci = SDK::ClientInstance::get();
     auto plr = ci ? ci->getLocalPlayer() : nullptr;
     if (!plr) return false;

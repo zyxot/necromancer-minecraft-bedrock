@@ -51,9 +51,13 @@ namespace LatencySpoof {
     void setInboundDelay(uint32_t ms);
     uint32_t getInboundDelay();
 
-    // Diagnostics. This feature fails silently by nature -- every failure path
-    // just forwards the datagram -- so these exist to tell "working" apart from
-    // "doing nothing" without guessing.
+    // Full incoming stop. The world view freezes completely; everything held is
+    // released in arrival order when toggled off.
+    void setInboundFrozen(bool frozen);
+
+    bool inboundHooked();
+    uint64_t inboundHeldCount();
+
     bool hooked();
     uint64_t heldCount();
     uint64_t passedCount();

@@ -9,9 +9,9 @@ namespace SDK {
     class Player;
 }
 
-class LegitScaffold : public Module {
+class Scaffolding : public Module {
 public:
-    LegitScaffold();
+    Scaffolding();
 
     void onBuildBlock(Event& evG);
     void onTick(Event& evG);
@@ -59,6 +59,9 @@ private:
     int bridgeY = 0;
     bool hasBridgeY = false;
     std::chrono::steady_clock::time_point nextPlace {};
+    int failStreak = 0;
+
+    void resetBridgeState();
 
     bool shouldAllow(BlockPos const& blockPos, uint8_t face) const;
     bool isBelowFeet(BlockPos const& blockPos) const;

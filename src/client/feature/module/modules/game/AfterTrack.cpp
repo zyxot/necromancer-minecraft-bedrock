@@ -264,17 +264,21 @@ bool AfterTrack::isAttackPacket(SDK::Packet* packet, uint64_t& outTarget) const 
     auto id = packet->getID();
     auto base = reinterpret_cast<uintptr_t>(packet);
 
+    using Interact = Signatures::FieldOffset::InteractPacket;
+    using AuthInput = Signatures::FieldOffset::PlayerAuthInputPacket;
+    using Txn = Signatures::FieldOffset::ItemUseTransaction;
+
     if (id == SDK::PacketID::INTERACT) {
-        if (*reinterpret_cast<uint8_t*>(base + 0x30) != 2) return false;
-        outTarget = *reinterpret_cast<uint64_t*>(base + 0x38);
+        if (*reinterpret_cast<uint8_t*>(base + Interact::action) != Interact::actionAttack) return false;
+        outTarget = *reinterpret_cast<uint64_t*>(base + Interact::targetRuntimeId);
         return true;
     }
 
     if (id == SDK::PacketID::PLAYER_AUTH_INPUT) {
-        auto txn = *reinterpret_cast<uintptr_t*>(base + 0xB0);
+        auto txn = *reinterpret_cast<uintptr_t*>(base + AuthInput::itemUseTransaction);
         if (!txn) return false;
-        if (*reinterpret_cast<uint32_t*>(txn + 0x70) != 1) return false;
-        outTarget = *reinterpret_cast<uint64_t*>(txn + 0x68);
+        if (*reinterpret_cast<uint32_t*>(txn + Txn::actionType) != Txn::actionAttack) return false;
+        outTarget = *reinterpret_cast<uint64_t*>(txn + Txn::targetRuntimeId);
         return true;
     }
 
@@ -294,11 +298,12 @@ void AfterTrack::sendLatencyProbe(float offsetMs) {
     if (!pkt) return;
 
     auto base = reinterpret_cast<uintptr_t>(pkt.get());
+    using Nsl = Signatures::FieldOffset::NetworkStackLatencyPacket;
     uint64_t nowUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count());
-    *reinterpret_cast<uint64_t*>(base + 0x30) = nowUs;
-    *reinterpret_cast<uint8_t*>(base + 0x38) = 1;
+    *reinterpret_cast<uint64_t*>(base + Nsl::timestamp) = nowUs;
+    *reinterpret_cast<uint8_t*>(base + Nsl::needsResponse) = 1;
 
     probeInFlight = true;
     lp->packetSender->sendToServer(pkt.get());

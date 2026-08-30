@@ -26,6 +26,9 @@ private:
     ValueType skipCritsIfKillable = BoolValue(true);
     // Fire at the backtrack ghost box instead of the live model.
     ValueType backtrackTarget = BoolValue(false);
+    ValueType lagRecordsOnly = BoolValue(false);
+    ValueType ignoreInvulnerable = BoolValue(false);
+    ValueType leftClickSwing = BoolValue(false);
 
     enum class TargetRecord {
         Live,
@@ -63,6 +66,8 @@ private:
     bool backtrackResolved = false;
     class AfterTrack* afterTrackModule = nullptr;
     bool afterTrackResolved = false;
+    class Aimbot* aimbotModule = nullptr;
+    bool aimbotResolved = false;
 
     TargetSelection pickTarget(float maxRange);
     bool canFire(SDK::Actor* target);
@@ -70,4 +75,5 @@ private:
     bool performDirectAttack(SDK::LocalPlayer* lp, TargetSelection const& target);
     Backtrack* resolveBacktrack();
     AfterTrack* resolveAfterTrack();
+    Aimbot* resolveAimbot();
 };

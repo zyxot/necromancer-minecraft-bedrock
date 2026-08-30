@@ -323,9 +323,17 @@ public:
 
     void setSelectedKey(int key) { selectedIdx = EnumValue(key); }
 
-    [[nodiscard]] std::wstring getSelectedName() { return entries[std::get<EnumValue>(selectedIdx)].name(); }
+    [[nodiscard]] std::wstring getSelectedName() {
+        int idx = std::get<EnumValue>(selectedIdx);
+        if (idx < 0 || idx >= static_cast<int>(entries.size())) return L"";
+        return entries[static_cast<size_t>(idx)].name();
+    }
 
-    [[nodiscard]] std::wstring getSelectedDesc() { return entries[std::get<EnumValue>(selectedIdx)].desc(); }
+    [[nodiscard]] std::wstring getSelectedDesc() {
+        int idx = std::get<EnumValue>(selectedIdx);
+        if (idx < 0 || idx >= static_cast<int>(entries.size())) return L"";
+        return entries[static_cast<size_t>(idx)].desc();
+    }
 
     void refreshLocalization() {
         for (auto& entry : entries) {
@@ -447,6 +455,7 @@ public:
 
     bool visible = true;
     bool supportsTagColor = false;
+    bool multiSelect = false;
 
     struct {
         bool init = false;

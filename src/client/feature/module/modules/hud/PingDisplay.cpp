@@ -3,6 +3,7 @@
 #include "mc/common/network/RemoteConnectorComposite.h"
 #include "client/event/events/AveragePingEvent.h"
 #include "client/event/Eventing.h"
+#include "client/misc/RealPing.h"
 
 PingDisplay::PingDisplay()
     : TextModule("PingDisplay", LocalizeString::get("client.textmodule.pingDisplay.name"),
@@ -18,7 +19,7 @@ std::wstringstream PingDisplay::text(bool isDefault, bool inEditor) {
 
     auto* connectionInfo = SDK::RemoteConnectorComposite::getConnectionInfo();
     if (connectionInfo && !connectionInfo->hostIpAddress.empty()) {
-        dPing = ping;
+        dPing = static_cast<int>(RealPing::get());
     }
 
     wss << dPing;
@@ -29,5 +30,6 @@ std::wstringstream PingDisplay::text(bool isDefault, bool inEditor) {
 void PingDisplay::onAvgPing(Event& evGeneric) {
     AveragePingEvent& ev = static_cast<AveragePingEvent&>(evGeneric);
 
-    ping = ev.getPing();
+    RealPing::recordRaw(static_cast<uint32_t>(ev.getPing()));
+    ping = static_cast<int>(RealPing::get());
 }

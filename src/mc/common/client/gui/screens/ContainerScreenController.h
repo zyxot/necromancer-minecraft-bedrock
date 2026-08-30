@@ -10,7 +10,8 @@ namespace SDK {
     public:
         CLASS_FIELD(void*, containerManager, 0x12C0);
 
-        void _handleTakePlace(const std::string& viewName, int slot, bool b);
+        void clickSlot(const std::string& collection, int slot);
+        void dropSlot(const std::string& collection, int slot);
         void* _getSelectedSlotInfo();
         void handleAutoPlace(const std::string& collection, int slot);
         ItemStack* getItemStack(const std::string& collection, int slot);

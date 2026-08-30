@@ -100,11 +100,11 @@ public:
     std::optional<float> health();
     std::optional<float> maxHealth();
     std::optional<float> hunger();
-    std::optional<float> fallDistance();
     bool sprinting();
     bool walking();
     bool sneaking();
     bool onGround();
+    float fallDistance();
     std::string const& heldItemId();
     int enemiesWithin(float range);
 
@@ -117,19 +117,19 @@ private:
     std::optional<float> vHealth;
     std::optional<float> vMaxHealth;
     std::optional<float> vHunger;
-    std::optional<float> vFall;
     bool vSprint = false;
     bool vWalk = false;
     bool vSneak = false;
     bool vGround = false;
+    float vFall = 0.f;
     std::string vHeld;
 
     bool dHealth = false;
     bool dMaxHealth = false;
     bool dHunger = false;
-    bool dFall = false;
     bool dMove = false;
     bool dGround = false;
+    bool dFall = false;
     bool dHeld = false;
     bool dEnemies = false;
 

@@ -1,13 +1,19 @@
 #include "pch.h"
 #include "ArmorHud.h"
 #include "client/Necromancer.h"
+#include "client/event/events/RenderLayerEvent.h"
 #include "client/render/Renderer.h"
 #include "client/render/asset/ItemIconCache.h"
+#include "client/screen/ScreenManager.h"
+#include "client/feature/module/modules/visual/AntiObs.h"
 #include "mc/common/client/game/ClientInstance.h"
+#include "mc/common/client/gui/controls/UIControl.h"
+#include "mc/common/client/gui/controls/VisualTree.h"
 #include "mc/common/client/player/LocalPlayer.h"
 #include "mc/common/world/Item.h"
 #include "mc/common/world/ItemStack.h"
 #include "mc/common/world/actor/player/Player.h"
+#include "mc/common/resources/ResourcePackManager.h"
 #include "util/DrawContext.h"
 
 namespace {
@@ -56,6 +62,8 @@ ArmorHud::ArmorHud()
     addSetting("barBgColor", LocalizeString::get("client.hudmodule.armorHud.barBgColor.name"),
                LocalizeString::get("client.hudmodule.armorHud.barBgColor.desc"), barBgColor,
                "showDurabilityBar"_istrue);
+
+    listen<RenderLayerEvent>(static_cast<EventListenerFunc>(&ArmorHud::onRenderLayer));
 }
 
 int ArmorHud::collectPieces(SDK::Player* player, Piece out[slot_count]) {
@@ -98,7 +106,9 @@ int ArmorHud::collectPieces(SDK::Player* player, Piece out[slot_count]) {
     return found;
 }
 
-void ArmorHud::drawIcon(DrawUtil& dc, Piece const& piece, Vec2 pos, float size) {
+void ArmorHud::drawIcon(DrawUtil& dc, Piece const& piece, Vec2 pos, float size, bool iconsHere) {
+    if (!iconsHere) return;
+
     if (ItemIconCache::drawItem(dc, piece.stack, pos, size)) return;
 
     // No embedded texture, which happens on servers shipping custom items.
@@ -128,8 +138,8 @@ void ArmorHud::drawOutlinedText(DrawUtil& dc, d2d::Rect const& rc, std::wstring 
                 DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 }
 
-void ArmorHud::drawPiece(DrawUtil& dc, Piece const& piece, Vec2 pos, float size, float cellW) {
-    drawIcon(dc, piece, pos, size);
+void ArmorHud::drawPiece(DrawUtil& dc, Piece const& piece, Vec2 pos, float size, float cellW, bool iconsHere) {
+    drawIcon(dc, piece, pos, size, iconsHere);
 
     d2d::Color txtCol(std::get<ColorValue>(textColor).getMainColor());
     float barH = std::max(2.f, size * 0.1f);
@@ -169,27 +179,41 @@ void ArmorHud::drawPiece(DrawUtil& dc, Piece const& piece, Vec2 pos, float size,
     }
 }
 
+ArmorHud::Metrics ArmorHud::layoutMetrics() {
+    Metrics m;
+    m.size = 32.f;
+    m.vertical = mode.getSelectedKey() == mode_vertical;
+    m.gap = std::max(2.f, m.size * 0.12f);
+    bool showNumbers = std::get<BoolValue>(showDurabilityNumber);
+    m.rowH = showNumbers ? textRowHeight(m.size) : 0.f;
+    m.cellH = m.size + m.rowH;
+
+    m.cellW = m.size;
+    m.stepX = m.size + m.gap;
+    if (showNumbers && !m.vertical) {
+        m.cellW = m.size * 1.45f;
+        m.stepX = m.cellW + m.gap;
+    } else if (showNumbers) {
+        m.cellW = m.size * 1.6f;
+    }
+    return m;
+}
+
 void ArmorHud::render(DrawUtil& dc, bool isDefault, bool inEditor) {
     if (isDefault) return;
 
-    constexpr float size = 32.f;
-    bool vertical = mode.getSelectedKey() == mode_vertical;
-    float gap = std::max(2.f, size * 0.12f);
-    bool showNumbers = std::get<BoolValue>(showDurabilityNumber);
-    float rowH = showNumbers ? textRowHeight(size) : 0.f;
-    float cellH = size + rowH;
+    Metrics m = layoutMetrics();
+    float size = m.size;
+    bool vertical = m.vertical;
+    float gap = m.gap;
+    float cellH = m.cellH;
+    float cellW = m.cellW;
+    float stepX = m.stepX;
 
-    // Icons pack tightly. When durability numbers are shown horizontally the text is
-    // wider than its icon, so nudge the step out just enough to keep neighbouring
-    // numbers from touching, rather than a fixed oversized cell.
-    float cellW = size;
-    float stepX = size + gap;
-    if (showNumbers && !vertical) {
-        cellW = size * 1.45f;
-        stepX = cellW + gap;
-    } else if (showNumbers) {
-        cellW = size * 1.6f;
-    }
+    // Icons follow ESP's split: the game's own item renderer on the hud_screen
+    // layer when the overlay is available, the D2D bitmap cache under AntiObs or
+    // while a screen is open (the editor), where the game layer is gated off.
+    bool iconsHere = AntiObs::isActive() || Necromancer::get().getScreenManager().getActiveScreen();
 
     auto setBounds = [&](int count) {
         if (count <= 0) {
@@ -248,11 +272,52 @@ void ArmorHud::render(DrawUtil& dc, bool isDefault, bool inEditor) {
 
     for (int i = 0; i < slot_count; i++) {
         if (!pieces[i].valid) continue;
-        drawPiece(dc, pieces[i], pos, size, cellW);
+        drawPiece(dc, pieces[i], pos, size, cellW, iconsHere);
         if (vertical) pos.y += cellH + gap;
         else pos.x += stepX;
         drawn++;
     }
 
     setBounds(drawn);
+}
+
+void ArmorHud::onRenderLayer(Event& evG) {
+    auto& event = reinterpret_cast<RenderLayerEvent&>(evG);
+
+    if (AntiObs::isActive()) return;
+    if (Necromancer::get().getScreenManager().getActiveScreen()) return;
+    if (!isActive()) return;
+
+    auto* screenView = event.getScreenView();
+    if (!screenView || !screenView->visualTree || !screenView->visualTree->rootControl ||
+        screenView->visualTree->rootControl->name != "hud_screen")
+        return;
+
+    auto ci = SDK::ClientInstance::get();
+    auto lp = ci ? ci->getLocalPlayer() : nullptr;
+    if (!lp) return;
+
+    MCDrawUtil dc { event.getUIRenderContext(), Necromancer::get().getFont() };
+
+    Piece pieces[slot_count];
+    int found = collectPieces(lp, pieces);
+    if (found == 0) return;
+
+    Metrics m = layoutMetrics();
+    float hudScale = getScale();
+
+    Vec2 pos { rect.left, rect.top };
+    float size = m.size * hudScale;
+    float gap = m.gap * hudScale;
+    float cellH = m.cellH * hudScale;
+    float stepX = m.stepX * hudScale;
+
+    for (int i = 0; i < slot_count; i++) {
+        if (!pieces[i].valid) continue;
+        ItemIconCache::drawItem(dc, pieces[i].stack, pos, size);
+        if (m.vertical) pos.y += cellH + gap;
+        else pos.x += stepX;
+    }
+
+    dc.flush();
 }

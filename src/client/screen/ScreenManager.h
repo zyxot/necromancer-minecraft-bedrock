@@ -2,6 +2,7 @@
 #include "screens/ClickGUI.h"
 #include "screens/HUDEditor.h"
 #include "screens/SkinStealerScreen.h"
+#include "screens/SkinsScreen.h"
 
 #include "client/manager/StaticManager.h"
 #include "client/event/Listener.h"
@@ -10,7 +11,7 @@
 
 #include "util/Util.h"
 
-class ScreenManager : public Listener, public StaticManager<Screen, ClickGUI, HUDEditor, SkinStealerScreen> {
+class ScreenManager : public Listener, public StaticManager<Screen, ClickGUI, HUDEditor, SkinStealerScreen, SkinsScreen> {
 public:
     ScreenManager();
 

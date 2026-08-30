@@ -1,15 +1,22 @@
 #include "pch.h"
 #include "ChestStealer.h"
 
+#include "client/Necromancer.h"
 #include "client/event/events/RenderLayerEvent.h"
 #include "client/event/events/TickEvent.h"
+#include "client/screen/ScreenManager.h"
+#include "client/screen/screens/ClickGUI.h"
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/client/gui/controls/VisualTree.h"
 #include "mc/common/client/gui/controls/UIControl.h"
 #include "mc/common/client/gui/screens/ContainerScreenController.h"
 #include "mc/common/client/player/LocalPlayer.h"
 #include "mc/common/world/ItemStack.h"
-#include "util/Logger.h"
+
+#include <algorithm>
+#include <map>
+#include <string>
+#include <unordered_set>
 
 namespace {
     const std::string COLL_CONTAINER = "container_items";
@@ -180,6 +187,53 @@ namespace {
             return -1;
         }
     }
+
+    void splitCustomItems(std::wstring const& raw, std::map<std::string, int>& out) {
+        auto pushEntry = [&](std::wstring const& token) {
+            size_t colon = token.rfind(L':');
+            if (colon != std::wstring::npos && colon > 0 && colon + 1 < token.size()) {
+                int count = 0;
+                bool allDigits = true;
+                for (size_t i = colon + 1; i < token.size(); i++) {
+                    wchar_t c = token[i];
+                    if (c < L'0' || c > L'9') {
+                        allDigits = false;
+                        break;
+                    }
+                    count = count * 10 + (c - L'0');
+                }
+                if (allDigits) {
+                    out[util::WStrToStr(token.substr(0, colon))] = std::min(count, 2304);
+                    return;
+                }
+            }
+            out[util::WStrToStr(token)] = 0;
+        };
+
+        size_t start = 0;
+        while (start <= raw.size()) {
+            size_t end = raw.find_first_of(L",;\n", start);
+            if (end == std::wstring::npos) end = raw.size();
+            if (end > start) {
+                std::wstring token = raw.substr(start, end - start);
+                size_t first = token.find_first_not_of(L' ');
+                size_t last = token.find_last_not_of(L' ');
+                if (first != std::wstring::npos) pushEntry(token.substr(first, last - first + 1));
+            }
+            if (end == raw.size()) break;
+            start = end + 1;
+        }
+    }
+
+    std::wstring joinCustomItems(std::map<std::string, int> const& items) {
+        std::wstring out;
+        for (auto const& [id, count] : items) {
+            if (!out.empty()) out += L",";
+            out += util::StrToWStr(id);
+            if (count > 0) out += L":" + std::to_wstring(count);
+        }
+        return out;
+    }
 }
 
 ChestStealer::ChestStealer()
@@ -197,6 +251,57 @@ ChestStealer::ChestStealer()
                LocalizeString::get("client.module.chestStealer.enhanced.desc"), enhanced);
     addSetting("autoOrganize", LocalizeString::get("client.module.chestStealer.autoOrganize.name"),
                LocalizeString::get("client.module.chestStealer.autoOrganize.desc"), autoOrganize, "enhanced"_istrue);
+
+    auto makeHidden = [&](std::shared_ptr<Setting> s) {
+        s->visible = false;
+        return s;
+    };
+
+    makeHidden(addSliderSetting("maxBows", LocalizeString::get("client.module.chestStealer.maxBows.name"),
+                                LocalizeString::get("client.module.chestStealer.maxBows.desc"), maxBows, FloatValue(0.f),
+                                FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxSwords", LocalizeString::get("client.module.chestStealer.maxSwords.name"),
+                                LocalizeString::get("client.module.chestStealer.maxSwords.desc"), maxSwords,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxHelmets", LocalizeString::get("client.module.chestStealer.maxHelmets.name"),
+                                LocalizeString::get("client.module.chestStealer.maxHelmets.desc"), maxHelmets,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxChestplates", LocalizeString::get("client.module.chestStealer.maxChestplates.name"),
+                                LocalizeString::get("client.module.chestStealer.maxChestplates.desc"), maxChestplates,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxLeggings", LocalizeString::get("client.module.chestStealer.maxLeggings.name"),
+                                LocalizeString::get("client.module.chestStealer.maxLeggings.desc"), maxLeggings,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxBoots", LocalizeString::get("client.module.chestStealer.maxBoots.name"),
+                                LocalizeString::get("client.module.chestStealer.maxBoots.desc"), maxBoots, FloatValue(0.f),
+                                FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxGapples", LocalizeString::get("client.module.chestStealer.maxGapples.name"),
+                                LocalizeString::get("client.module.chestStealer.maxGapples.desc"), maxGapples,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxBlocks", LocalizeString::get("client.module.chestStealer.maxBlocks.name"),
+                                LocalizeString::get("client.module.chestStealer.maxBlocks.desc"), maxBlocks,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxArrows", LocalizeString::get("client.module.chestStealer.maxArrows.name"),
+                                LocalizeString::get("client.module.chestStealer.maxArrows.desc"), maxArrows,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxFood", LocalizeString::get("client.module.chestStealer.maxFood.name"),
+                                LocalizeString::get("client.module.chestStealer.maxFood.desc"), maxFood, FloatValue(0.f),
+                                FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxEggs", LocalizeString::get("client.module.chestStealer.maxEggs.name"),
+                                LocalizeString::get("client.module.chestStealer.maxEggs.desc"), maxEggs, FloatValue(0.f),
+                                FloatValue(2304.f), FloatValue(1.f)));
+    makeHidden(addSliderSetting("maxLavaBuckets", LocalizeString::get("client.module.chestStealer.maxLavaBuckets.name"),
+                                LocalizeString::get("client.module.chestStealer.maxLavaBuckets.desc"), maxLavaBuckets,
+                                FloatValue(0.f), FloatValue(2304.f), FloatValue(1.f)));
+
+    auto data = addSetting("customItems", L"customItems", L"", customItems);
+    data->visible = false;
+    auto pickerBtn = addSetting(
+        "customOpenPicker", LocalizeString::get("client.module.chestStealer.customOpenPicker.name"),
+        LocalizeString::get("client.module.chestStealer.customOpenPicker.desc"), customOpenPicker, "enhanced"_istrue);
+    pickerBtn->callback = [this](Setting&) {
+        Necromancer::getScreenManager().get<ClickGUI>().openChestStealerItems(this);
+    };
 }
 
 void ChestStealer::resetSession() {
@@ -220,6 +325,99 @@ void ChestStealer::onEnable() {
 }
 
 void ChestStealer::onDisable() { resetSession(); }
+
+bool ChestStealer::hasCustomItem(std::string const& id) const {
+    std::map<std::string, int> set;
+    splitCustomItems(std::get<TextValue>(customItems).str, set);
+    return set.contains(id);
+}
+
+void ChestStealer::addCustomItem(std::string const& id) {
+    std::map<std::string, int> set;
+    splitCustomItems(std::get<TextValue>(customItems).str, set);
+    if (!set.emplace(id, 0).second) return;
+    std::get<TextValue>(customItems).str = joinCustomItems(set);
+}
+
+void ChestStealer::removeCustomItem(std::string const& id) {
+    std::map<std::string, int> set;
+    splitCustomItems(std::get<TextValue>(customItems).str, set);
+    if (!set.erase(id)) return;
+    std::get<TextValue>(customItems).str = joinCustomItems(set);
+}
+
+int ChestStealer::customItemCount(std::string const& id) const {
+    std::map<std::string, int> set;
+    splitCustomItems(std::get<TextValue>(customItems).str, set);
+    auto it = set.find(id);
+    return it != set.end() ? it->second : 0;
+}
+
+void ChestStealer::setCustomItemCount(std::string const& id, int count) {
+    std::map<std::string, int> set;
+    splitCustomItems(std::get<TextValue>(customItems).str, set);
+    auto it = set.find(id);
+    if (it == set.end()) return;
+    it->second = std::clamp(count, 0, 2304);
+    std::get<TextValue>(customItems).str = joinCustomItems(set);
+}
+
+void ChestStealer::writeCustomItems(std::map<std::string, int> const& items) {
+    std::get<TextValue>(customItems).str = joinCustomItems(items);
+}
+
+std::vector<std::string> ChestStealer::customItemList() const {
+    std::map<std::string, int> set;
+    splitCustomItems(std::get<TextValue>(customItems).str, set);
+    std::vector<std::string> out;
+    out.reserve(set.size());
+    for (auto const& [id, count] : set) out.push_back(id);
+    return out;
+}
+
+std::vector<std::string> const& ChestStealer::limitSettingNames() {
+    static const std::vector<std::string> names = {
+        "maxBows",    "maxSwords",   "maxHelmets",  "maxChestplates", "maxLeggings", "maxBoots",
+        "maxGapples", "maxBlocks",   "maxArrows",   "maxFood",        "maxEggs",     "maxLavaBuckets",
+    };
+    return names;
+}
+
+ValueType const* ChestStealer::findLimitValue(std::string const& settingName) const {
+    if (settingName == "maxBows") return &maxBows;
+    if (settingName == "maxSwords") return &maxSwords;
+    if (settingName == "maxHelmets") return &maxHelmets;
+    if (settingName == "maxChestplates") return &maxChestplates;
+    if (settingName == "maxLeggings") return &maxLeggings;
+    if (settingName == "maxBoots") return &maxBoots;
+    if (settingName == "maxGapples") return &maxGapples;
+    if (settingName == "maxBlocks") return &maxBlocks;
+    if (settingName == "maxArrows") return &maxArrows;
+    if (settingName == "maxFood") return &maxFood;
+    if (settingName == "maxEggs") return &maxEggs;
+    if (settingName == "maxLavaBuckets") return &maxLavaBuckets;
+    return nullptr;
+}
+
+float ChestStealer::maxValue(std::string const& settingName) const {
+    auto* v = findLimitValue(settingName);
+    return v ? std::get<FloatValue>(*v).value : 0.f;
+}
+
+void ChestStealer::bumpMax(std::string const& settingName, int delta) {
+    auto* v = const_cast<ValueType*>(findLimitValue(settingName));
+    if (!v) return;
+    auto& f = std::get<FloatValue>(*v);
+    f.value = std::clamp(f.value + static_cast<float>(delta), 0.f, 2304.f);
+    Setting* set = nullptr;
+    settings->forEach([&](std::shared_ptr<Setting> s) {
+        if (!set && s->name() == settingName) set = s.get();
+    });
+    if (set) {
+        set->update();
+        set->userUpdate();
+    }
+}
 
 SDK::ItemStack* ChestStealer::readSlot(const std::string& collection, int slot) {
     if (!controller) return nullptr;
@@ -309,14 +507,13 @@ bool ChestStealer::processAction(std::chrono::steady_clock::time_point now) {
 
 bool ChestStealer::buildPlan(std::chrono::steady_clock::time_point now) {
     if (!containerScreen) {
-        if (std::get<BoolValue>(enhanced) && std::get<BoolValue>(autoOrganize)) {
+        if (std::get<BoolValue>(enhanced)) {
             phase = Phase::Organize;
             return false;
         }
         finish();
         return false;
     }
-
     bool doEnhanced = std::get<BoolValue>(enhanced);
 
     float equippedScore[4] = { 0.f, 0.f, 0.f, 0.f };
@@ -336,14 +533,71 @@ bool ChestStealer::buildPlan(std::chrono::steady_clock::time_point now) {
             if (!stack) continue;
             auto info = describe(stack);
             if (info.is(KindSword)) bestOwnedSword = std::max(bestOwnedSword, info.gearScore);
+            if (info.is(KindArmor)) equippedScore[info.armorType] = std::max(equippedScore[info.armorType], info.gearScore);
         }
         for (int i = 0; i < 27; i++) {
             auto stack = readSlot(COLL_INVENTORY, i);
             if (!stack) continue;
             auto info = describe(stack);
             if (info.is(KindSword)) bestOwnedSword = std::max(bestOwnedSword, info.gearScore);
+            if (info.is(KindArmor)) equippedScore[info.armorType] = std::max(equippedScore[info.armorType], info.gearScore);
         }
     }
+
+    struct KindBudget {
+        ItemKind kind;
+        int have;
+        int cap;
+    };
+
+    int armorHave[4] = { 0, 0, 0, 0 };
+    int swordHave = 0;
+    KindBudget budgets[9];
+    auto fillBudgets = [&]() {
+        int bi = 0;
+        budgets[bi++] = { KindBow, 0, static_cast<int>(std::get<FloatValue>(maxBows).value) };
+        budgets[bi++] = { KindGapple, 0, static_cast<int>(std::get<FloatValue>(maxGapples).value) };
+        budgets[bi++] = { KindArrow, 0, static_cast<int>(std::get<FloatValue>(maxArrows).value) };
+        budgets[bi++] = { KindFood, 0, static_cast<int>(std::get<FloatValue>(maxFood).value) };
+        budgets[bi++] = { KindBlock, 0, static_cast<int>(std::get<FloatValue>(maxBlocks).value) };
+        budgets[bi++] = { KindEgg, 0, static_cast<int>(std::get<FloatValue>(maxEggs).value) };
+        budgets[bi++] = { KindSnowball, 0, static_cast<int>(std::get<FloatValue>(maxEggs).value) };
+        budgets[bi++] = { KindLavaBucket, 0, static_cast<int>(std::get<FloatValue>(maxLavaBuckets).value) };
+        budgets[bi++] = { KindJunk, 0, 0 };
+    };
+
+    std::map<std::string, int> custom;
+    if (doEnhanced) splitCustomItems(std::get<TextValue>(customItems).str, custom);
+
+    fillBudgets();
+    if (doEnhanced) {
+        for (int i = 0; i < 9; i++) {
+            auto stack = readSlot(COLL_HOTBAR, i);
+            if (!stack) continue;
+            auto info = describe(stack);
+            if (info.is(KindArmor)) armorHave[info.armorType]++;
+            if (info.is(KindSword)) swordHave++;
+            for (auto& b : budgets) {
+                if (b.kind == info.kind) b.have++;
+            }
+        }
+        for (int i = 0; i < 27; i++) {
+            auto stack = readSlot(COLL_INVENTORY, i);
+            if (!stack) continue;
+            auto info = describe(stack);
+            if (info.is(KindArmor)) armorHave[info.armorType]++;
+            if (info.is(KindSword)) swordHave++;
+            for (auto& b : budgets) {
+                if (b.kind == info.kind) b.have++;
+            }
+        }
+    }
+
+    int armorCap[4] = { static_cast<int>(std::get<FloatValue>(maxHelmets).value),
+                        static_cast<int>(std::get<FloatValue>(maxChestplates).value),
+                        static_cast<int>(std::get<FloatValue>(maxLeggings).value),
+                        static_cast<int>(std::get<FloatValue>(maxBoots).value) };
+    int swordCap = static_cast<int>(std::get<FloatValue>(maxSwords).value);
 
     float bestChestArmor[4] = { -1.f, -1.f, -1.f, -1.f };
     int bestChestArmorSlot[4] = { -1, -1, -1, -1 };
@@ -351,34 +605,59 @@ bool ChestStealer::buildPlan(std::chrono::steady_clock::time_point now) {
     int bestChestSwordSlot = -1;
 
     int found = 0;
-    std::string dump;
     for (int i = 0; i < 54; i++) {
         auto stack = readSlot(COLL_CONTAINER, i);
         if (!stack) continue;
         found++;
 
-        if (doEnhanced) {
-            auto info = describe(stack);
-            if (info.is(KindArmor)) {
-                if (info.gearScore > equippedScore[info.armorType] && info.gearScore > bestChestArmor[info.armorType]) {
-                    bestChestArmor[info.armorType] = info.gearScore;
-                    bestChestArmorSlot[info.armorType] = i;
-                }
-                continue;
-            }
-            if (info.is(KindSword)) {
-                if (info.gearScore > bestOwnedSword && info.gearScore > bestChestSword) {
-                    bestChestSword = info.gearScore;
-                    bestChestSwordSlot = i;
-                }
-                continue;
-            }
+        if (!doEnhanced) {
+            plan.push_back(i);
+            continue;
         }
 
-        if (dump.size() < 160) {
-            if (!dump.empty()) dump += ", ";
-            dump += std::to_string(i) + ":" + itemIdOf(stack) + "x" + std::to_string(stack->itemCount);
+        auto info = describe(stack);
+
+        if (info.is(KindArmor)) {
+            if (armorHave[info.armorType] < armorCap[info.armorType] &&
+                info.gearScore > equippedScore[info.armorType] && info.gearScore > bestChestArmor[info.armorType]) {
+                bestChestArmor[info.armorType] = info.gearScore;
+                bestChestArmorSlot[info.armorType] = i;
+            }
+            continue;
         }
+        if (info.is(KindSword)) {
+            bool room = swordHave < swordCap || info.gearScore > bestOwnedSword;
+            if (room && info.gearScore > bestChestSword) {
+                bestChestSword = info.gearScore;
+                bestChestSwordSlot = i;
+            }
+            continue;
+        }
+
+        if (auto it = custom.find(info.id); it != custom.end()) {
+            int remaining = it->second;
+            if (remaining <= 0 || info.count <= remaining) {
+                plan.push_back(i);
+                it->second = 0;
+            } else {
+                plan.push_back(i);
+                it->second = remaining - info.count;
+            }
+            continue;
+        }
+
+        bool budgeted = false;
+        for (auto& b : budgets) {
+            if (b.kind != info.kind) continue;
+            budgeted = true;
+            if (b.have < b.cap) {
+                plan.push_back(i);
+                b.have++;
+            }
+        }
+        if (budgeted) continue;
+
+        if (info.kind == KindJunk) continue;
         plan.push_back(i);
     }
 
@@ -396,7 +675,7 @@ bool ChestStealer::buildPlan(std::chrono::steady_clock::time_point now) {
 
     lastAction = now;
     if (plan.empty()) {
-        if (doEnhanced) {
+        if (doEnhanced && std::get<BoolValue>(autoOrganize).value) {
             phase = Phase::Organize;
         } else {
             finish();
@@ -417,12 +696,7 @@ bool ChestStealer::processSteal() {
             controller->autoPlaceSlot(COLL_CONTAINER, verifySlot, left);
             return true;
         }
-        if (left > 0) {
-            Logger::Warn("[ChestStealer] slot {} still holds {} after {} attempts, skipping", verifySlot, left,
-                         verifyAttempts + 1);
-        } else {
-            lootedStacks++;
-        }
+        if (left == 0) lootedStacks++;
         verifySlot = -1;
         verifyAttempts = 0;
     }
@@ -438,7 +712,7 @@ bool ChestStealer::processSteal() {
         return true;
     }
 
-    if (std::get<BoolValue>(enhanced)) {
+    if (std::get<BoolValue>(enhanced) && std::get<BoolValue>(autoOrganize).value) {
         phase = Phase::Organize;
     } else {
         finish();

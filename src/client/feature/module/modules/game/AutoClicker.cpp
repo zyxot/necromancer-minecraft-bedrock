@@ -4,6 +4,7 @@
 #include "client/event/events/UpdateEvent.h"
 #include "client/misc/EntityCache.h"
 #include "client/misc/PlayerListManager.h"
+#include "client/feature/module/modules/game/Aimbot.h"
 
 #include "mc/common/client/game/ClientInstance.h"
 #include "mc/common/world/actor/Actor.h"
@@ -163,6 +164,15 @@ bool AutoClicker::isHoldingBlock() {
     return stack && stack->block != nullptr;
 }
 
+Aimbot* AutoClicker::resolveAimbot() {
+    if (!aimbotResolved) {
+        auto mod = Necromancer::getModuleManager().find("Aimbot");
+        aimbotModule = mod ? static_cast<Aimbot*>(mod.get()) : nullptr;
+        aimbotResolved = true;
+    }
+    return aimbotModule;
+}
+
 bool AutoClicker::hasAttackableTarget() {
     auto clientInstance = SDK::ClientInstance::get();
     if (!clientInstance || !clientInstance->minecraft) return false;
@@ -170,6 +180,16 @@ bool AutoClicker::hasAttackableTarget() {
     if (!level) return false;
     auto lp = clientInstance->getLocalPlayer();
     if (!lp) return false;
+
+    // PSilent targets are never under the crosshair by design, so the raycast below
+    // would report "no target" and Break Block would keep the button held down,
+    // starving every attack. Ask the Aimbot lock directly instead.
+    if (auto* ab = resolveAimbot(); ab && ab->isPSilent()) {
+        uint64_t lockId = 0;
+        AABB lockBox {};
+        Vec3 lockPoint {};
+        if (ab->getPSilentLock(lockId, lockBox, lockPoint)) return true;
+    }
 
     auto hit = level->getHitResult();
     if (!hit) return false;

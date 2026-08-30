@@ -39,11 +39,6 @@ SDK::Options* SDK::ClientInstance::getOptions() {
     return hat::member_at<Options*>(this, 0xD78);
 }
 
-SDK::ResourcePackManager& SDK::ClientInstance::getResourcePackManager() {
-    return *memory::callVirtual<ResourcePackManager*>(this,
-                                                     Signatures::VtableIndex::ClientInstance::getResourcePackManager);
-}
-
 void SDK::ClientInstance::grabCursor() {
     reinterpret_cast<void(__fastcall*)(void*)>(Signatures::ClientInstance_grabCursor.result)(this);
 }

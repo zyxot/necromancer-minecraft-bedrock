@@ -124,3 +124,4 @@ bool PacketHooks::injectReceived(std::shared_ptr<SDK::Packet>& packet) {
                                                                                lastNetEventCallback, packet);
     return true;
 }
+

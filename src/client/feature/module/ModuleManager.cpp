@@ -4,14 +4,23 @@
 #include "modules/misc/Nickname.h"
 #include "modules/misc/ItemTweaks.h"
 #include "modules/misc/SkinStealer.h"
+#include "modules/misc/Skins.h"
 #include "modules/misc/Font.h"
 #include "modules/misc/AntiBot.h"
 #include "modules/misc/DisableMouseWheel.h"
 #include "modules/misc/ChatSpammer.h"
 #include "modules/misc/AutoBlock.h"
-#include "modules/misc/LegitScaffold.h"
+#include "modules/misc/Scaffolding.h"
 #include "modules/misc/ChestStealer.h"
 #include "modules/misc/ItemSwitcher.h"
+#include "modules/misc/Spoofer.h"
+#include "modules/misc/NoSlowDown.h"
+#include "modules/misc/FastStop.h"
+#include "modules/misc/SafeWalk.h"
+#include "modules/misc/BoxMe.h"
+#include "modules/misc/BoxEnemy.h"
+#include "modules/misc/WallBuilder.h"
+#include "modules/misc/AutoPlace.h"
 #include "modules/misc/DebugInfo.h"
 
 #include "modules/game/Zoom.h"
@@ -20,12 +29,14 @@
 #include "modules/game/EnvironmentChanger.h"
 #include "modules/game/TextHotkey.h"
 #include "modules/game/Freelook.h"
+#include "modules/game/Freecam.h"
 #include "modules/game/KillNotification.h"
 #include "modules/game/AutoClicker.h"
 #include "modules/game/Aimbot.h"
 #include "modules/game/Triggerbot.h"
 #include "modules/game/ShieldBreaker.h"
 #include "modules/game/Reach.h"
+#include "modules/game/Criticals.h"
 #include "modules/game/NoFall.h"
 #include "modules/game/Fakelag.h"
 #include "modules/game/Backtrack.h"
@@ -33,6 +44,7 @@
 #include "modules/game/Velocity.h"
 #include "modules/game/AntiAFK.h"
 #include "modules/game/GameTimer.h"
+#include "modules/game/SpearSwap.h"
 
 #include "modules/visual/Fullbright.h"
 #include "modules/visual/HurtColor.h"
@@ -40,6 +52,7 @@
 #include "modules/visual/BlockOutline.h"
 #include "modules/visual/BlockESP.h"
 #include "modules/visual/ESP.h"
+#include "modules/visual/MovementPrediction.h"
 #include "modules/visual/OutOfViewArrows.h"
 #include "modules/visual/AntiObs.h"
 #include "modules/visual/DamageIndicator.h"
@@ -93,18 +106,21 @@ ModuleManager::ModuleManager() {
     // this->items.push_back(std::make_shared<Chat>());
     this->items.push_back(std::make_shared<TextHotkey>());
     this->items.push_back(std::make_shared<Freelook>());
+    this->items.push_back(std::make_shared<Freecam>());
     this->items.push_back(std::make_shared<ComboCounter>());
     this->items.push_back(std::make_shared<CustomCoordinates>());
     this->items.push_back(std::make_shared<MovableCoordinates>());
     this->items.push_back(std::make_shared<WAILA>());
     this->items.push_back(std::make_shared<Font>());
     this->items.push_back(std::make_shared<SkinStealer>());
+    this->items.push_back(std::make_shared<Skins>());
     this->items.push_back(std::make_shared<KillNotification>());
     this->items.push_back(std::make_shared<AutoClicker>());
     this->items.push_back(std::make_shared<Aimbot>());
     this->items.push_back(std::make_shared<Triggerbot>());
     this->items.push_back(std::make_shared<ShieldBreaker>());
     this->items.push_back(std::make_shared<Reach>());
+    this->items.push_back(std::make_shared<Criticals>());
     this->items.push_back(std::make_shared<NoFall>());
     this->items.push_back(std::make_shared<Fakelag>());
     this->items.push_back(std::make_shared<Backtrack>());
@@ -112,7 +128,9 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<Velocity>());
     this->items.push_back(std::make_shared<AntiAFK>());
     this->items.push_back(std::make_shared<GameTimer>());
+    this->items.push_back(std::make_shared<SpearSwap>());
     this->items.push_back(std::make_shared<ESP>());
+    this->items.push_back(std::make_shared<MovementPrediction>());
     this->items.push_back(std::make_shared<OutOfViewArrows>());
     this->items.push_back(std::make_shared<AntiObs>());
     this->items.push_back(std::make_shared<DamageIndicator>());
@@ -120,9 +138,17 @@ ModuleManager::ModuleManager() {
     this->items.push_back(std::make_shared<DisableMouseWheel>());
     this->items.push_back(std::make_shared<ChatSpammer>());
     this->items.push_back(std::make_shared<AutoBlock>());
-    this->items.push_back(std::make_shared<LegitScaffold>());
+    this->items.push_back(std::make_shared<Scaffolding>());
     this->items.push_back(std::make_shared<ChestStealer>());
     this->items.push_back(std::make_shared<ItemSwitcher>());
+    this->items.push_back(std::make_shared<Spoofer>());
+    this->items.push_back(std::make_shared<NoSlowDown>());
+    this->items.push_back(std::make_shared<FastStop>());
+    this->items.push_back(std::make_shared<SafeWalk>());
+    this->items.push_back(std::make_shared<BoxMe>());
+    this->items.push_back(std::make_shared<BoxEnemy>());
+    this->items.push_back(std::make_shared<WallBuilder>());
+    this->items.push_back(std::make_shared<AutoPlace>());
     this->items.push_back(std::make_shared<DebugInfo>());
 
     for (auto& mod : items) {

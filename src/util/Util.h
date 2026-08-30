@@ -54,6 +54,4 @@ namespace util {
 
     extern void KeepInBounds(d2d::Rect& targ, d2d::Rect const& bounds);
     extern std::string GetProcessorInfo();
-    extern bool TryGetGameTextureBuffer(std::string const& texturePath, std::string& buffer);
-    extern std::string GetGameTextureBuffer(std::string const& texturePath);
 }

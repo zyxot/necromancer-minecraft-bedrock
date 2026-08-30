@@ -2,6 +2,7 @@
 #include "EntityCache.h"
 #include "client/event/Eventing.h"
 #include "client/feature/module/modules/misc/AntiBot.h"
+#include "client/misc/MovementSim.h"
 #include "mc/common/world/level/Level.h"
 #include <algorithm>
 #include <mutex>
@@ -64,7 +65,7 @@ std::shared_ptr<EntityCache::Snapshot> EntityCache::acquireBuffer() {
     return std::make_shared<Snapshot>();
 }
 
-void EntityCache::rebuild() {
+void EntityCache::rebuild(bool feedTracker) {
     std::lock_guard lock { rebuildMutex };
 
     auto snap = acquireBuffer();
@@ -102,6 +103,10 @@ void EntityCache::rebuild() {
 
                 snap->actors.push_back(entt);
                 snap->views.push_back(view);
+
+                if (feedTracker && (view.isPlayer || view.kind == EntKind::Mob)) {
+                    MovementSim::trackEntity(entt, view.isPlayer);
+                }
             }
 
             snap->buildIndex();
@@ -123,15 +128,16 @@ SDK::Actor* EntityCache::findByRuntimeID(uint64_t runtimeId) {
 }
 
 void EntityCache::onTick(Event&) {
-    rebuild();
+    rebuild(true);
 }
 
 void EntityCache::onRenderLevel(Event&) {
     auto now = std::chrono::steady_clock::now();
     if (now - lastRebuild.load(std::memory_order_acquire) < renderStaleAfter) return;
-    rebuild();
+    rebuild(false);
 }
 
 void EntityCache::onLeaveGame(Event&) {
     current.store(std::make_shared<const Snapshot>(), std::memory_order_release);
+    MovementSim::clearTracking();
 }

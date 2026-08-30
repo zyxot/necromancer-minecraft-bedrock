@@ -8,6 +8,7 @@
 #include "client/misc/ItemCatalog.h"
 #include "client/misc/KeybindManager.h"
 #include "client/render/Renderer.h"
+#include "client/render/asset/ItemIconCache.h"
 #include "../../render/asset/Assets.h"
 #include "util/DrawContext.h"
 #include <algorithm>
@@ -292,6 +293,9 @@ void ClickGUI::closeCondCanvas() {
     condPaletteRect = {};
     condItemPickerRect = {};
     condIconDraws.clear();
+    if (auto baseMod = Necromancer::getModuleManager().find("BlockESP")) {
+        if (auto mod = std::static_pointer_cast<BlockESP>(baseMod)) mod->clearIconDraws();
+    }
     Necromancer::getConfigManager().saveCurrentConfig();
 }
 
@@ -458,8 +462,11 @@ void ClickGUI::drawCondCanvas(D2DUtil& dc, bool rtl) {
             if (n->kind == CondKind::HoldingItem && !n->itemId.empty()) {
                 float iconSz = rowH * 0.66f;
                 d2d::Rect iconRc { tx, rc.top + (rowH - iconSz) * 0.5f, tx + iconSz, rc.top + (rowH + iconSz) * 0.5f };
-                if (void* block = ItemCatalog::get().blockFor(n->itemId))
+                if (void* block = ItemCatalog::get().blockFor(n->itemId)) {
                     condIconDraws.emplace_back(iconRc, block);
+                } else {
+                    ItemIconCache::drawItemIcon(dc, n->itemId, { iconRc.left, iconRc.top }, iconSz);
+                }
                 tx = iconRc.right + rowH * 0.18f;
             }
             std::wstring label = nodeSummary(*n);
@@ -1331,7 +1338,7 @@ void ClickGUI::drawCondItemPicker(D2DUtil& dc) {
                            rowRc.bottom - iconPad };
         if (entry->block) {
             condIconDraws.emplace_back(iconRc, entry->block);
-        } else {
+        } else if (!ItemIconCache::drawItemIcon(dc, entry->id, { iconRc.left, iconRc.top }, iconSize)) {
             dc.fillRoundedRectangle(iconRc, d2d::Color::RGB(0x3A, 0x3A, 0x3A).asAlpha(0.9f), iconSize * 0.2f);
             std::wstring initial = entry->displayName.empty() ? L"?" : entry->displayName.substr(0, 1);
             dc.drawAutoFitted(iconRc, initial, d2d::Color(1.f, 1.f, 1.f, 0.75f), FontSelection::PrimaryRegular,

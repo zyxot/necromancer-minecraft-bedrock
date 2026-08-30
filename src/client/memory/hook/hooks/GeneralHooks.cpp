@@ -95,10 +95,8 @@ LRESULT GenericHooks::MainWindow__windowProcCallback(HWND hwnd, UINT msg, WPARAM
                                                      LPARAM lParam) { // Name from China
     if (msg == WM_SETCURSOR) {
         std::optional<std::reference_wrapper<Screen>> activeScreen = Necromancer::get().getScreenManager().getActiveScreen();
-        SDK::Platform_GameCore* platform = SDK::Platform_GameCore::get();
-        constexpr uintptr_t mouseGrabbedOffset = 0x7D8;
-        const bool gameMouseGrabbed =
-            platform && *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(platform) + mouseGrabbedOffset);
+        SDK::GameCore* gameCore = SDK::GameCore::get();
+        const bool gameMouseGrabbed = gameCore && gameCore->mouseGrabbed;
 
         if (!activeScreen && gameMouseGrabbed) {
             SetCursor(nullptr);
@@ -377,16 +375,14 @@ void GenericHooks::hkUpdatePlayer(SDK::CameraComponent* obj, void* a, void* b) {
     UpdatePlayerCameraEvent ev {};
     Eventing::get().dispatch(ev);
 
-    auto oAngles = util::QuaternionToRot(obj->lookAngles);
     auto origAngles = obj->lookAngles;
 
-    if (ev.getNewRot()) {
-        obj->lookAngles = util::RotToQuaternion(*ev.getNewRot());
-        UpdatePlayerHook->oFunc<decltype(&hkUpdatePlayer)>()(obj, a, b);
-        if (!ev.isPersistent()) obj->lookAngles = origAngles;
-        return;
-    }
+    if (ev.getNewRot()) obj->lookAngles = util::RotToQuaternion(*ev.getNewRot());
+
     UpdatePlayerHook->oFunc<decltype(&hkUpdatePlayer)>()(obj, a, b);
+
+    if (ev.getNewPosition()) obj->cameraPos = *ev.getNewPosition();
+    if (!ev.isPersistent()) obj->lookAngles = origAngles;
 }
 
 void GenericHooks::hkOnUri(void* obj, void* pUri) {
@@ -469,6 +465,7 @@ GenericHooks::GenericHooks()
 
     RenderEntityHook = addHook(Signatures::ActorRenderDispatcher_render.result, ActorRenderDispatcher_render,
                                "ActorRenderDispatcher::render");
+
     OutlineSelectionHook =
         addHook(Signatures::LevelRendererPlayer_renderOutlineSelection.result,
                 LevelRendererPlayer_renderOutlineSelection, "LevelRendererPlayer::renderOutlineSelection");

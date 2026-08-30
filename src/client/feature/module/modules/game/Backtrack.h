@@ -40,7 +40,8 @@ public:
     bool getGhostBox(uint64_t runtimeID, AABB& out, float* outAgeMs = nullptr);
     bool getGhostRecords(uint64_t runtimeID, std::vector<GhostRecord>& out);
     bool prepareGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec3 const& hitPoint, float ageMs);
-    bool queueGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec3 const& hitPoint, float ageMs);
+    bool queueGhostAttack(uint64_t runtimeID, AABB const& ghostBox, Vec3 const& hitPoint, float ageMs,
+                          bool multiPart = false);
     void allowDirectAttack(uint64_t runtimeID);
 
 private:
@@ -120,6 +121,7 @@ private:
     void sendLatencyProbe(float offsetMs);
 
     void applyFakeLatency();
+    void applyInboundControl();
     bool isLootContainer(BlockPos const& pos);
     bool fakeLatencyStopped(std::chrono::steady_clock::time_point now) const;
     // How far back the ghost box / target lookup should reach. Fake latency counts
@@ -137,6 +139,8 @@ private:
     ValueType timeMs = FloatValue(150.f);
     ValueType fakeLatencyMs = FloatValue(0.f);
     ValueType stackLatencyDelayMs = FloatValue(0.f);
+    ValueType freezeIncoming = BoolValue(false);
+    ValueType delayIncomingMs = FloatValue(0.f);
     ValueType stopFakeLatencyWhenLooting = BoolValue(false);
     ValueType stopFakeLatencyWhenUsingItem = BoolValue(false);
     ValueType stopFakeLatencyWhenOpeningInventory = BoolValue(false);
@@ -152,6 +156,9 @@ private:
     ValueType hitbox = BoolValue(true);
     ValueType hitboxColor = ColorValue(1.f, 0.55f, 0.f, 0.6f);
     ValueType hitboxThickness = FloatValue(0.3f);
+    ValueType fillOpacity = FloatValue(0.25f);
+    ValueType decayRecords = BoolValue(false);
+    ValueType decayMinAlpha = FloatValue(0.15f);
     ValueType throughWalls = BoolValue(true);
 
     std::unordered_map<uint64_t, std::deque<Sample>> buffers;
@@ -164,6 +171,10 @@ private:
     // Last value pushed into LatencySpoof, so the slider is only applied on change.
     uint32_t appliedLatencyMs = 0;
     bool fakeLatencyPaused = false;
+    // Last values pushed into the inbound hold, so freeze/delay are only applied
+    // on change.
+    bool appliedInboundFrozen = false;
+    uint32_t appliedInboundDelayMs = 0;
     std::chrono::steady_clock::time_point inventoryAttemptUntil {};
     std::chrono::steady_clock::time_point lootAttemptUntil {};
     std::chrono::steady_clock::time_point inventoryScreenSeenAt {};
@@ -174,6 +185,9 @@ private:
     std::chrono::steady_clock::time_point swallowUntil {};
     uint64_t reissueRID = 0;
     std::chrono::steady_clock::time_point reissueUntil {};
+    Vec2 ghostFireDir {};
+    bool ghostFireDirArmed = false;
+    std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastQueueAt {};
     struct PreparedGhostAttack {
         uint64_t runtimeID = 0;
         AABB box {};
@@ -207,21 +221,4 @@ private:
     // live long enough for at least one to carry it.
     std::chrono::steady_clock::time_point reportedOffsetUntil {};
     std::vector<float> ghostAgeScratch;
-    // Pending damage confirmations: after firing we watch the target's health for a
-    // short window so the log can say whether the hit actually registered, instead of
-    // only that we sent it.
-    struct PendingConfirm {
-        uint64_t runtimeID;
-        float hpAtFire;
-        float ghostAge;
-        float reportedOffset;
-        // Distance from the click point to the top of the ghost box. This is the value
-        // that actually predicts whether damage lands, so it is what the trace reports.
-        float belowTop;
-        std::chrono::steady_clock::time_point firedAt;
-        bool done;
-    };
-    std::deque<PendingConfirm> confirmQueue;
-    void processConfirmations();
-    static constexpr int confirmWindowMs = 700;
 };

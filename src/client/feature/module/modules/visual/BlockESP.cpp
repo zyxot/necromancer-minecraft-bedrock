@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "BlockESP.h"
 #include "AntiObs.h"
+#include "mc/Addresses.h"
 #include "client/misc/ItemCatalog.h"
 #include "client/event/events/LeaveGameEvent.h"
 #include "client/Necromancer.h"
@@ -211,8 +212,8 @@ namespace {
         return std::string(buf.data(), raw->size);
     }
 
-    constexpr size_t blockLegacyNamespacedIdOffset = 0xE0;
-    constexpr size_t blockLegacyTranslateNameOffset = 0x8;
+    constexpr size_t blockLegacyNamespacedIdOffset = Signatures::FieldOffset::BlockLegacy::namespacedId;
+    constexpr size_t blockLegacyTranslateNameOffset = Signatures::FieldOffset::BlockLegacy::translateName;
 
     std::optional<void*> resolveLegacyBlock(SDK::Item* item, size_t offset, bool extraDeref) {
         auto candidate = safeReadAs<void*>(reinterpret_cast<char const*>(item) + offset);
@@ -232,8 +233,8 @@ namespace {
         return *hash;
     }
 
-    constexpr size_t blockLegacyBackPtrOffset = 0x68;
-    constexpr size_t maxStateProbeOffset = 0x400;
+    constexpr size_t blockLegacyBackPtrOffset = Signatures::FieldOffset::BlockLegacy::backPtr;
+    constexpr size_t maxStateProbeOffset = Signatures::FieldOffset::BlockLegacy::maxStateProbe;
 
     std::optional<void*> resolveDefaultState(void* legacy, size_t offset) {
         auto candidate = safeReadAs<void*>(reinterpret_cast<char const*>(legacy) + offset);
@@ -250,15 +251,15 @@ void BlockESP::rebuildCatalog() {
     auto level = ci && ci->minecraft ? ci->minecraft->getLevel() : nullptr;
     if (!level) return;
 
-    void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + 0x198);
+    void* registry = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(level) + Signatures::FieldOffset::Level::itemRegistry);
     if (!registry) return;
 
-    auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + 0x38);
+    auto itemCounters = reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(registry) + Signatures::FieldOffset::ItemRegistry::itemCounters);
     if (!itemCounters[0] || !itemCounters[1]) return;
 
     auto i18n = SDK::I18n::get();
 
-    constexpr size_t maxProbeOffset = 0x260;
+    constexpr size_t maxProbeOffset = Signatures::FieldOffset::BlockLegacy::maxProbe;
     constexpr int votesNeeded = 12;
 
     std::map<std::pair<size_t, bool>, int> votes;
@@ -598,6 +599,16 @@ void BlockESP::renderProjectedBoxes(DrawUtil& dc) {
 void BlockESP::onRenderLayer(RenderLayerEvent& event) {
     if (iconDraws.empty()) return;
     if (AntiObs::isActive()) return;
+
+    // The icon list is fed by external UIs (condition editor) every frame while they
+    // are open. Anything older than a moment is a stale handoff from a screen that
+    // closed without clearing — drop it instead of rendering a permanent ghost.
+    auto now = std::chrono::steady_clock::now();
+    if (iconDrawsStamp.time_since_epoch().count() == 0 ||
+        now - iconDrawsStamp > std::chrono::milliseconds(500)) {
+        iconDraws.clear();
+        return;
+    }
 
     auto view = event.getScreenView();
     if (!view || !view->visualTree || !view->visualTree->rootControl) return;

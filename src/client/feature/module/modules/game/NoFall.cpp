@@ -21,7 +21,9 @@
 #include <mc/common/nbt/CompoundTag.h>
 #include <mc/common/network/Packet.h>
 #include <client/event/events/TickEvent.h>
+#include "client/event/events/BeforeMoveEvent.h"
 #include "client/event/events/SendPacketEvent.h"
+#include "mc/Addresses.h"
 
 namespace {
     constexpr int enchIdProtection = 0;
@@ -203,6 +205,9 @@ NoFall::NoFall()
                LocalizeString::get("client.module.nofall.ignorePlacedWater.desc"), ignorePlacedWater, manualCond);
     addSetting("pickUpWater", LocalizeString::get("client.module.nofall.pickUpWater.name"),
                LocalizeString::get("client.module.nofall.pickUpWater.desc"), pickUpWater, manualCond);
+    auto psilentSetting = addSetting("psilent", LocalizeString::get("client.module.nofall.psilent.name"),
+                                     LocalizeString::get("client.module.nofall.psilent.desc"), psilent, autoWaterCond);
+    psilentSetting->visible = false;
 
     addSetting("useFakelag", LocalizeString::get("client.module.nofall.useFakelag.name"),
                LocalizeString::get("client.module.nofall.useFakelag.desc"), useFakelag, autoWaterCond);
@@ -216,10 +221,13 @@ NoFall::NoFall()
 
     this->listen<UpdateEvent>(&NoFall::onUpdate);
     this->listen<TickEvent>((EventListenerFunc)&NoFall::onTick);
+    this->listen<BeforeMoveEvent>((EventListenerFunc)&NoFall::onBeforeMove);
     this->listen<SendPacketEvent>((EventListenerFunc)&NoFall::onSendPacket);
 }
 
 void NoFall::onSendPacket(Event& evG) {
+    auto& ev = reinterpret_cast<SendPacketEvent&>(evG);
+
     if (!freezeActive || state != ClutchState::Frozen) return;
 
     auto ci = SDK::ClientInstance::get();
@@ -239,18 +247,26 @@ void NoFall::onSendPacket(Event& evG) {
         return;
     }
 
-    auto& ev = reinterpret_cast<SendPacketEvent&>(evG);
     auto* packet = ev.getPacket();
     if (!packet) return;
 
     auto id = packet->getID();
     if (id != SDK::PacketID::PLAYER_AUTH_INPUT && id != SDK::PacketID::MOVE_PLAYER) return;
 
+    if (id == SDK::PacketID::PLAYER_AUTH_INPUT) {
+        using AuthInput = Signatures::FieldOffset::PlayerAuthInputPacket;
+        auto base = reinterpret_cast<uintptr_t>(packet);
+        uint64_t inputData = *reinterpret_cast<uint64_t*>(base + AuthInput::inputData);
+        uintptr_t txn = *reinterpret_cast<uintptr_t*>(base + AuthInput::itemUseTransaction);
+        if ((inputData & (uint64_t { 1 } << 34)) != 0 && txn) return;
+    }
+
     ev.setCancelled(true);
 }
 
 void NoFall::afterLoadConfig() {
     if (mode.getSelectedKey() != 0) mode.setSelectedKey(0);
+    std::get<BoolValue>(psilent).value = false;
 }
 
 void NoFall::onEnable() {
@@ -263,14 +279,15 @@ void NoFall::onEnable() {
     placedAt = {};
     lastAimFrame = {};
     protectionCachedAt = {};
-    lastWindowLog = {};
     slowFallSince = {};
-    lastBucketWarn = {};
     landedAt = {};
     pickupStartedAt = {};
     pickupClickedAt = {};
     preSwitched = false;
     placeAttempts = 0;
+    savedRot = {};
+    rotSpoofed = false;
+    rotSpoofedAt = {};
 }
 
 void NoFall::onDisable() {
@@ -291,6 +308,7 @@ void NoFall::restoreSlot(SDK::Player* lp) {
 void NoFall::resetClutch() {
     freezeActive = false;
     freezeTicksLeft = 0;
+    lastPickupAttempt = {};
     freezeStartedAt = {};
     state = ClutchState::Idle;
     lastAimFrame = {};
@@ -300,13 +318,11 @@ void NoFall::resetClutch() {
     landedAt = {};
     pickupStartedAt = {};
     pickupClickedAt = {};
-    lastStateLog = {};
     sawFallingAfterPlace = false;
 }
 
 void NoFall::abortClutch(SDK::Player* lp, char const* reason) {
-    restoreSlot(lp);
-    resetClutch();
+    finishClutch(lp);
 }
 
 NoFall::TunedParams NoFall::resolveParams(float velY, float heightAboveFace) const {
@@ -347,6 +363,62 @@ float NoFall::getProtectionFactor(SDK::Player* lp, std::chrono::steady_clock::ti
     cachedProtection = fallProtectionFactor(lp);
     protectionCachedAt = now;
     return cachedProtection;
+}
+
+bool NoFall::psilentEnabled() const {
+    return std::get<BoolValue>(psilent).value;
+}
+
+void NoFall::restoreSilentRot(SDK::LocalPlayer* lp) {
+    if (!rotSpoofed) return;
+    if (lp) lp->getRot() = savedRot;
+    rotSpoofed = false;
+}
+
+void NoFall::maybeRestoreRot(SDK::LocalPlayer* lp) {
+    if (!rotSpoofed || !lp) return;
+
+    auto mouse = SDK::MouseDevice::get();
+    bool pending = mouse && !mouse->inputs.empty();
+    auto heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - rotSpoofedAt)
+                      .count();
+    if (!pending || heldMs > 150) restoreSilentRot(lp);
+}
+
+void NoFall::finishClutch(SDK::Player* lp) {
+    if (rotSpoofed) {
+        auto mouse = SDK::MouseDevice::get();
+        if (mouse) mouse->inputs.clear();
+        restoreSilentRot(static_cast<SDK::LocalPlayer*>(lp));
+    }
+    restoreSlot(lp);
+    resetClutch();
+}
+
+void NoFall::applySilentClick(SDK::LocalPlayer* lp, Vec3 const& aimPoint) {
+    if (!lp) return;
+
+    Vec3 eye = lp->getPos();
+    Vec3 dir = aimPoint - eye;
+    float dist = dir.magnitude();
+    if (dist < 0.01f) return;
+
+    Vec3 n = dir * (1.f / dist);
+    Vec2 desired {
+        std::clamp(-std::asin(std::clamp(n.y, -1.f, 1.f)) * (180.f / pi_f), -89.9f, 89.9f),
+        std::atan2(n.z, n.x) * (180.f / pi_f) - 90.f,
+    };
+
+    if (!rotSpoofed) {
+        savedRot = lp->getRot();
+        rotSpoofed = true;
+        rotSpoofedAt = std::chrono::steady_clock::now();
+    }
+    lp->getRot() = desired;
+
+    pushAction(2, true);
+    pushAction(2, false);
 }
 
 float NoFall::aimAtWater(SDK::LocalPlayer* lp) {
@@ -403,6 +475,27 @@ bool NoFall::runPickup(SDK::LocalPlayer* lp, std::chrono::steady_clock::time_poi
 
     if (!MovementSim::isLiquidAt(region, placedWaterPos)) return true;
 
+    if (psilentEnabled()) {
+        if (lastPickupAttempt != std::chrono::steady_clock::time_point {} &&
+            now - lastPickupAttempt < std::chrono::milliseconds(100)) {
+            return false;
+        }
+        lastPickupAttempt = now;
+
+        int bucketSlot = findEmptyBucketSlot(lp);
+        if (bucketSlot < 0) return true;
+        if (lp->supplies->selectedSlot != bucketSlot) {
+            lp->supplies->selectedSlot = bucketSlot;
+            return false;
+        }
+
+        Vec3 center { static_cast<float>(placedWaterPos.x) + 0.5f,
+                      static_cast<float>(placedWaterPos.y) + 0.5f,
+                      static_cast<float>(placedWaterPos.z) + 0.5f };
+        applySilentClick(lp, center);
+        return !MovementSim::isLiquidAt(region, placedWaterPos);
+    }
+
     float dist = aimAtWater(lp);
     if (dist > 4.5f) return true;
 
@@ -430,10 +523,19 @@ bool NoFall::maceLockout(SDK::Player* lp) {
 }
 
 void NoFall::onTick(Event&) {
-    runClutch();
+    if (!psilentEnabled()) runClutch();
 }
 
 void NoFall::onUpdate(Event&) {
+    if (!psilentEnabled()) runClutch();
+}
+
+void NoFall::onBeforeMove(Event&) {
+    if (!psilentEnabled()) return;
+
+    auto ci = SDK::ClientInstance::get();
+    maybeRestoreRot(ci ? ci->getLocalPlayer() : nullptr);
+
     runClutch();
 }
 
@@ -481,7 +583,6 @@ void NoFall::runClutch() {
         if (waterThere && std::get<BoolValue>(pickUpWater)) {
             state = ClutchState::WaitLanding;
             landedAt = {};
-            lastStateLog = {};
             sawFallingAfterPlace = false;
         }
         return;
@@ -501,20 +602,33 @@ void NoFall::runClutch() {
             if (wantPickup) {
                 state = ClutchState::WaitLanding;
                 landedAt = {};
-                lastStateLog = {};
                 sawFallingAfterPlace = true;
             } else {
-                restoreSlot(lp);
-                resetClutch();
+                finishClutch(lp);
                 cooldownUntil = now + std::chrono::milliseconds(600);
             }
             return;
         }
 
-        if (stillFalling && queueEmpty && placeAttempts < 12) {
+        if (stillFalling && (queueEmpty || psilentEnabled()) && placeAttempts < 12) {
             float feet = lp->getBoundingBox().lower.y;
             float aboveTarget = feet - static_cast<float>(placeTargetBlock.y + 1);
             if (aboveTarget > -0.5f) {
+                if (psilentEnabled()) {
+                    if (clutchBucketSlot >= 0) {
+                        if (lp->supplies->selectedSlot != clutchBucketSlot) {
+                            lp->supplies->selectedSlot = clutchBucketSlot;
+                        }
+                        Vec3 aim { static_cast<float>(placeTargetBlock.x) + 0.5f,
+                                   static_cast<float>(placeTargetBlock.y) + 1.f,
+                                   static_cast<float>(placeTargetBlock.z) + 0.5f };
+                        applySilentClick(lp, aim);
+                    }
+                    placeAttempts++;
+                    placedWaterPos =
+                        BlockPos { placeTargetBlock.x, placeTargetBlock.y + 1, placeTargetBlock.z };
+                    return;
+                }
                 auto hit = ci->minecraft->getLevel() ? ci->minecraft->getLevel()->getHitResult() : nullptr;
                 bool canPlace = hit && hit->hitType == SDK::HitType::BLOCK && hit->face == 1;
                 if (canPlace) {
@@ -531,8 +645,7 @@ void NoFall::runClutch() {
         }
 
         if (!stillFalling || heldMs >= 1200 || placeAttempts >= 12) {
-            restoreSlot(lp);
-            resetClutch();
+            finishClutch(lp);
             cooldownUntil = now + std::chrono::milliseconds(400);
         }
         return;
@@ -541,13 +654,12 @@ void NoFall::runClutch() {
     if (state == ClutchState::WaitLanding) {
         auto* region = ci->getRegion();
         if (region && !MovementSim::isLiquidAt(region, placedWaterPos)) {
-            restoreSlot(lp);
-            resetClutch();
+            finishClutch(lp);
             cooldownUntil = now + std::chrono::milliseconds(400);
             return;
         }
 
-        aimAtWater(lp);
+        if (!psilentEnabled()) aimAtWater(lp);
 
         bool onGround = lp->isOnGround();
         float velY = lp->getVelocity().y;
@@ -561,8 +673,7 @@ void NoFall::runClutch() {
         auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - placedAt).count();
 
         if (waitedMs > 8000) {
-            restoreSlot(lp);
-            resetClutch();
+            finishClutch(lp);
             cooldownUntil = now + std::chrono::milliseconds(600);
             return;
         }
@@ -597,14 +708,12 @@ void NoFall::runClutch() {
         state = ClutchState::PickingUp;
         pickupStartedAt = {};
         pickupClickedAt = {};
-        lastStateLog = {};
         return;
     }
 
     if (state == ClutchState::PickingUp) {
         if (runPickup(lp, now)) {
-            restoreSlot(lp);
-            resetClutch();
+            finishClutch(lp);
             fallDistance = 0.f;
             hasLastY = false;
             cooldownUntil = now + std::chrono::milliseconds(600);
@@ -740,11 +849,14 @@ void NoFall::runClutch() {
     float dt = std::clamp(std::chrono::duration<float>(now - lastAimFrame).count(), 0.001f, 0.05f);
     lastAimFrame = now;
 
-    float alpha = 1.f;
-    float maxStep = 10000.f * dt;
-    Vec2 step { std::clamp(error.x * alpha, -maxStep, maxStep), std::clamp(error.y * alpha, -maxStep, maxStep) };
-    if (std::abs(step.x) > 0.001f || std::abs(step.y) > 0.001f) {
-        lp->applyTurnDelta(Vec2 { -step.x, step.y });
+    bool silent = psilentEnabled();
+    if (!silent) {
+        float alpha = 1.f;
+        float maxStep = 10000.f * dt;
+        Vec2 step { std::clamp(error.x * alpha, -maxStep, maxStep), std::clamp(error.y * alpha, -maxStep, maxStep) };
+        if (std::abs(step.x) > 0.001f || std::abs(step.y) > 0.001f) {
+            lp->applyTurnDelta(Vec2 { -step.x, step.y });
+        }
     }
 
     float reachMax = tuned.placeReach;
@@ -763,24 +875,32 @@ void NoFall::runClutch() {
     bool wouldOvershoot = nextHeight <= 1.5f || nextDist <= reachSafe || thenDist <= reachSafe || ticksLeft <= 2;
 
     if (!inReach) return;
-    if (!aimTight && !wouldOvershoot) return;
 
     auto level = ci->minecraft->getLevel();
     auto hit = level ? level->getHitResult() : nullptr;
-    bool hitIsBlock = hit && hit->hitType == SDK::HitType::BLOCK;
-    bool sameBlock = hitIsBlock && hit->hitBlock.x == landing->landingBlock.x &&
-                     hit->hitBlock.y == landing->landingBlock.y && hit->hitBlock.z == landing->landingBlock.z;
-    bool hitMatches = sameBlock && hit->face == 1;
-    bool fallbackTopFace = hitIsBlock && hit->face == 1 && (wouldOvershoot || aimTight);
-    if (!hitMatches && !fallbackTopFace) return;
 
-    auto mouse = SDK::MouseDevice::get();
-    if (!mouse) return;
+    BlockPos targetBlock {};
+    if (silent) {
+        if (!wouldOvershoot) return;
+        targetBlock = landing->landingBlock;
+    } else {
+        if (!SDK::MouseDevice::get()) return;
+        if (!aimTight && !wouldOvershoot) return;
+
+        bool hitIsBlock = hit && hit->hitType == SDK::HitType::BLOCK;
+        bool sameBlock = hitIsBlock && hit->hitBlock.x == landing->landingBlock.x &&
+                         hit->hitBlock.y == landing->landingBlock.y && hit->hitBlock.z == landing->landingBlock.z;
+        bool hitMatches = sameBlock && hit->face == 1;
+        bool fallbackTopFace = hitIsBlock && hit->face == 1 && (wouldOvershoot || aimTight);
+        if (!hitMatches && !fallbackTopFace) return;
+
+        targetBlock = hit->hitBlock;
+    }
 
     if (originalSlot < 0) originalSlot = lp->supplies->selectedSlot;
     clutchBucketSlot = bucketSlot;
-    placedWaterPos = BlockPos { hit->hitBlock.x, hit->hitBlock.y + 1, hit->hitBlock.z };
-    placeTargetBlock = hit->hitBlock;
+    placedWaterPos = BlockPos { targetBlock.x, targetBlock.y + 1, targetBlock.z };
+    placeTargetBlock = targetBlock;
     if (lp->supplies->selectedSlot != bucketSlot) lp->supplies->selectedSlot = bucketSlot;
 
     bool wantFreeze = std::get<BoolValue>(useFakelag).value && lp->aabbShape && lp->stateVector;
@@ -791,8 +911,14 @@ void NoFall::runClutch() {
         state = ClutchState::Frozen;
     }
 
-    pushAction(2, true);
-    pushAction(2, false);
+    if (silent) {
+        Vec3 aim { static_cast<float>(targetBlock.x) + 0.5f, static_cast<float>(targetBlock.y) + 1.f,
+                   static_cast<float>(targetBlock.z) + 0.5f };
+        applySilentClick(lp, aim);
+    } else {
+        pushAction(2, true);
+        pushAction(2, false);
+    }
     if (!wantFreeze) state = ClutchState::Placed;
     placedAt = now;
     placeAttempts = 1;
