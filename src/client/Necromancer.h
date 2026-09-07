@@ -170,7 +170,7 @@ private:
 
     std::queue<std::function<void(SDK::MinecraftUIRenderContext* ctx)>> uiRenderQueue;
     std::queue<std::function<void(ID2D1DeviceContext* ctx)>> dxRenderQueue;
-    std::queue<std::function<void()> clientThreadQueue;
+    std::queue<std::function<void()>> clientThreadQueue;
     std::mutex deferredD2DReleaseMutex;
     std::vector<IUnknown*> deferredD2DReleases;
 
