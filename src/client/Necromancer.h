@@ -66,7 +66,7 @@ public:
 
     static constexpr std::string_view version = "v2.8.1";
     static constexpr std::array<std::string_view, 1> supportedMinecraftVersions = {
-        "1.26.3x",
+        "1.26.4x",
     };
 
     [[nodiscard]] static constexpr bool supportsMinecraftVersion(std::string_view version) noexcept {
@@ -170,7 +170,7 @@ private:
 
     std::queue<std::function<void(SDK::MinecraftUIRenderContext* ctx)>> uiRenderQueue;
     std::queue<std::function<void(ID2D1DeviceContext* ctx)>> dxRenderQueue;
-    std::queue<std::function<void()>> clientThreadQueue;
+    std::queue<std::function<void()> clientThreadQueue;
     std::mutex deferredD2DReleaseMutex;
     std::vector<IUnknown*> deferredD2DReleases;
 
